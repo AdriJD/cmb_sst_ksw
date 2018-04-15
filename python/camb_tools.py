@@ -67,16 +67,16 @@ def read_camb_output(source_dir, ttype='scalar'):
     num_sources = f.read_reals(np.int32)
     f.close()
     num_sources = num_sources[0]
-
+    print 'num_sources', num_sources
     # reshape and turn to c-contiguous 
     transfer = delta_p_l_k.reshape((num_sources, ell.size, k.size), order='F')
     transfer = np.ascontiguousarray(transfer)
 
     # add monopole and dipole
-    transfer_full = np.zeros((num_sources, lmax+1, k.size), dtype=transfer.dtype)
-    transfer_full[:,2:,:] = transfer
+#    transfer_full = np.zeros((num_sources, lmax+1, k.size), dtype=transfer.dtype)
+#    transfer_full[:,2:,:] = transfer
 
-    return transfer_full, lmax, k
+    return transfer, lmax, k
 
 def get_spectra(source_dir, tag='', lensed=True):
     '''
@@ -100,11 +100,12 @@ def get_spectra(source_dir, tag='', lensed=True):
     Returns
     -------
     cls : array-like
-        TT, EE, BB, TE spectra, shape: (4, lmax+1)
+        TT, EE, BB, TE spectra, shape: (4, lmax+1). Note, start from ell=2
     '''
 
     if lensed:
-        camb_name = 'lensedCls.dat'
+        camb_name = 'lensedtotCls.dat'
+        # note that lensedtotCls also includes tensor contribution, lensedCl is just scalar
     else:
         camb_name = 'totCls.dat'
 
@@ -116,17 +117,21 @@ def get_spectra(source_dir, tag='', lensed=True):
 
     lmax = cls_in.shape[1] + 1
 
-    cls = np.zeros((4, lmax+1))
-    cls[:,2:] = cls_in[1:,:]
+    # discard ell column
+    ell = cls_in[0,:]
+    cls = cls_in[1:,:]
+    
+    # turn Dls into Cls
+    cls /= (ell * (ell + 1) / 2. / np.pi)
     
     return cls
                    
 #cls = get_spectra('/mn/stornext/d8/ITA/spider/adri/analysis/20171217_sst/camb_output', tag='test', lensed=False)  
-#print cls[:, :10]
+#print cls[2,:]
 
-tr, lmax, k = read_camb_output('/mn/stornext/d8/ITA/spider/adri/analysis/20171217_sst/camb_output', ttype='tensor')
+#tr, lmax, k = read_camb_output('/mn/stornext/d8/ITA/spider/adri/analysis/20171217_sst/camb_output', ttype='tensor')
 #print tr.shape
-print k.shape
+#print k.shape
 #print k
 #print lmax
 #print tr.flags
