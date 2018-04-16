@@ -100,7 +100,8 @@ def get_spectra(source_dir, tag='', lensed=True):
     Returns
     -------
     cls : array-like
-        TT, EE, BB, TE spectra, shape: (4, lmax+1). Note, start from ell=2
+        TT, EE, BB, TE spectra, shape: (4, lmax-1). Note, start from ell=2
+    lmax : int
     '''
 
     if lensed:
@@ -116,7 +117,7 @@ def get_spectra(source_dir, tag='', lensed=True):
     cls_in = np.ascontiguousarray(cls_in)
 
     lmax = cls_in.shape[1] + 1
-
+    
     # discard ell column
     ell = cls_in[0,:]
     cls = cls_in[1:,:]
@@ -124,8 +125,27 @@ def get_spectra(source_dir, tag='', lensed=True):
     # turn Dls into Cls
     cls /= (ell * (ell + 1) / 2. / np.pi)
     
-    return cls
-                   
+    return cls, lmax
+
+def get_so_noise(tt_file, pol_file):
+
+    nl_tt = np.loadtxt(tt_file)
+    nl_tt = nl_tt.transpose()
+    nl_tt = np.ascontiguousarray(nl_tt)
+
+    ell_tt = nl_tt[0]
+    nl_tt = nl_tt[1]
+
+    nl_pol = np.loadtxt(pol_file)
+    nl_pol = nl_pol.transpose()
+    nl_pol = np.ascontiguousarray(nl_pol)
+
+    ell_pol = nl_pol[0]
+    nl_pol = nl_pol[1]
+
+    return ell_tt, nl_tt, ell_pol, nl_pol
+    
+    
 #cls = get_spectra('/mn/stornext/d8/ITA/spider/adri/analysis/20171217_sst/camb_output', tag='test', lensed=False)  
 #print cls[2,:]
 

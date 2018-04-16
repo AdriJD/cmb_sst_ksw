@@ -8,6 +8,7 @@ import os
 import numpy as np
 from scipy.special import spherical_jn
 from scipy.integrate import trapz
+from scipy.linalg import inv
 import camb_tools as ct
 import pywigxjpf as wig
 from beamconv import instrument as instr
@@ -49,9 +50,13 @@ class PreCalc(instr.MPIBase):
         # load spectra
         if self.mpi_rank == 0:
 
-            cls = ct.get_spectra(source_dir, **kwargs)
+            cls, lmax = ct.get_spectra(source_dir, **kwargs)
 
         self.cls = self.broadcast_array(cls)
+        lmax = self.broadcast(lmax)
+        
+        self.depo['cls'] = cls
+        self.depo['cls_lmax'] = lmax
         
         # load transfer functions and aux
         for ttype in ['scalar', 'tensor']:
@@ -67,6 +72,55 @@ class PreCalc(instr.MPIBase):
                                 'lmax' : lmax,
                                 'k' : k}
 
+    def get_noise_curves(self, tt_file, pol_file):
+        '''
+        Load SO TT and pol noise curves and process
+        into TT, EE, BB, TE, TB and EB noise curves
+
+        Arguments
+        ---------
+        tt_file : str
+            Path to TT file
+        pol_file : str
+            Path to EE, BB file
+
+        '''
+
+        nls = None
+        lmin = None
+        lmax = None
+        
+        if self.mpi_rank == 0:
+
+            ell_tt, nl_tt, ell_pol, nl_pol = ct.get_so_noise(tt_file,
+                                                             pol_file)
+            # Make lmin equal
+            lmin_tt = ell_tt[0]
+            lmin_pol = ell_pol[0]
+            lmin = max(lmin_tt, lmin_pol)
+
+            # pol has lower lmin
+            nl_pol = nl_pol[ell_pol >= lmin]
+            ell_pol = ell_pol[ell_pol >= lmin]
+
+            # Compute noise spectra: TT, EE, BB, TE, TB, EB
+            nls = np.ones(6, ell_pol.size)
+            nls[0] = nl_tt
+            nls[1] = nl_pol
+            nls[2] = nl_pol
+            nls[3] = np.sqrt(nl_tt * nl_pol)
+            nls[4] = np.sqrt(nl_tt * nl_pol)
+            nls[5] = nl_pol
+
+        nls = self.broadcast_array(nls)
+        lmin = self.broadcast(lmin)
+        lmax = self.broadcast(lmax)
+
+        self.depo['nls'] = nls
+        self.depo['nls_lmin'] = lmin
+        self.depo['nls_lmax'] = lmax
+            
+            
     def get_default_radii(self):
         '''
         Get the radii (in Mpc) used in table 1 of liquori 2007
@@ -263,17 +317,22 @@ class PreCalc(instr.MPIBase):
         return beta
 
 
-# class 2
-# sky and experimental details
-# for now, fsky, cls, nls (beam), pol combinations
-class Experiment(object):
-    
-    def __init__(self):
+#class Experiment(object):
+#    '''
+#    Experimental details such as noise, fsky, pol
+#    '''
+#    
+#    def __init__(self, fsky=1.):
+#
+#        self.fsky = fsky
+#
+#    def get_noise(self):
+#        '''
+#        Load noise curves
+#        '''
 
-        pass
+        # column colin: [ell] [N_ell^TT in uK^2] [N_ell^yy (dimensionless)]
 
-# class 3
-# bispectra. Start with local model in TSS.
 class Bispectrum(PreCalc):
     '''
     Create arrays of shape (nfact, 3, k.size)
@@ -309,9 +368,8 @@ class Bispectrum(PreCalc):
 #        template *= amp
         
         return template
-# class 3
-# fisher matrix
-# for now, brute force the fisher matrix in python
+
+    
 
 class Fisher(Bispectrum, Experiment):
     
@@ -319,16 +377,23 @@ class Fisher(Bispectrum, Experiment):
 
         super(Fisher, self).__init__(**kwargs)
 
-#        lmax_s = self.depo['scalar']['lmax']
-#        lmax_t = self.depo['tensor']['lmax']
+        # Determine lmin and lmax        
+        lmax_s = self.depo['scalar']['lmax']
+        lmax_t = self.depo['tensor']['lmax']
 
-#        lmax = max(lmax_s, lmax_t)
-        lmax = 4000
-        # Initialize wigner tables
-        wig.wig_table_init(2*lmax,9)
-        wig.wig_temp_init(2*lmax)
+        lmax_cl = self.depo['cls_lmax']
         
+        lmax_nl = self.depo['nls_lmax']
+        lmin_nl = self.depo['cls_lmin']
 
+        self.lmax = min(lmax_s, lmax_t, lmax_cl, lmax_nl)
+        self.lmin = lmin_nl
+
+        # Initialize wigner tables
+        wig.wig_table_init(2 * self.lmax + 100, 9)
+        wig.wig_temp_init(2 * self.lmax + 100)
+        
+        
     def init_bins(self, bins=None):
         '''
         Create default ell bins. Stores attributes for
@@ -349,16 +414,14 @@ class Fisher(Bispectrum, Experiment):
                    Lowest sum tuple per 3d bin that passes triangle
                    condition. Shape : (nbins, nbins, nbins, 3)
         '''
-
-        lmax_s = self.depo['scalar']['lmax']
-        lmax_t = self.depo['tensor']['lmax']
-
-        lmax = max(lmax_s, lmax_t)
-
-        lmax = 1000 # NOTENOTE
         
+        lmax = self.lmax
+        lmin = self.lmin
+        
+        lmax = 1000 ########## NOTENOTE
+            
         # bins used in Meerburg 2016
-        ell_0 = np.arange(2, 101, 1)
+        ell_0 = np.arange(lmin, 101, 1)
         ell_1 = np.arange(110, 510, 10)
         ell_2 = np.arange(520, 8000, 20)
         bins = np.concatenate((ell_0, ell_1, ell_2))
@@ -372,7 +435,7 @@ class Fisher(Bispectrum, Experiment):
         # allocate space for first good tuple per 3d bin
         first_pass = np.zeros((num_bins, num_bins, num_bins, 3), dtype=int)
 
-        ells1 = np.arange(2, lmax+1)
+        ells1 = np.arange(lmin, lmax+1)
 
         # calculate bins in parallel, split ell1
         ells1_sub = ells1[self.mpi_rank::self.mpi_size]
@@ -447,11 +510,57 @@ class Fisher(Bispectrum, Experiment):
         self.first_pass = first_pass
 
 
-    def binned_fisher():
-        # probably MPI ell bins
-        pass
-    
+    def get_binned_invcov(self):
+        '''
+        Combine singnal and noise into an inverse cov matrix
+        per bin. We first bin, then compute inverse.
 
+        Notes
+        -----
+        Stores shape = (ells, 3, 3) array. ells is unbinned.
+        '''
+
+        cls = self.depo['cls'] # lmin = 2
+        nls = self.depo['nls']
+        
+        lmin = self.lmin
+        lmax = self.lmax
+
+        # assume nls start at lmin, cls at ell=2
+        nls = nls[:,:lmax - lmin + 1]
+        cls = cls[:,lmin-2:lmax]
+
+        # cls for TB and TE not present in cls
+        nls[:4,:] += cls
+
+        # first bin, then take inverse
+        ells = np.arange(lmin, lmax+1)
+        indices = np.digitize(ells, self.bins, left=True)
+
+        cov = np.ones((ells.size, 3, 3))
+        cov *= np.nan
+        invcov = cov.copy()
+        
+        nls_dict = {'TT': 0, 'EE': 1, 'BB': 2, 'TE': 3,
+                    'TB' : 4, 'EB': 5}
+              
+        for pidx1, _ in enumerate(['T', 'E', 'B']):
+            for pidx2, _ in enumerate(['T', 'E', 'B']):
+
+                nidx = nls_dict[pidx1+pidx2]
+                cov[:,pidx1,pidx2] = nls[nidx,indices]
+
+        for lidx, ell in ells:
+            invcov[lidx,:] = inv(cov[lidx,:])
+            
+        self.invcov = invcov
+
+    def get_pol_invcoc(self):
+        '''
+        Calculate the inverse covariance matrix
+        in pol tuple space
+        '''
+        
     def get_Ls(ell1, ell2, ell3, prim_type):
         '''
         Arguments
@@ -471,30 +580,65 @@ class Fisher(Bispectrum, Experiment):
 
         if prim_type = 'tss':
             
-            dLs1 = [-2, -1, 0, 1, 2]
-            dLs2 = [-1, 1]
-            dLs3 = [-1, 1]
+            Ls1 = range(ell1 - 2, ell1 + 3)
+            Ls2 = [ell2 - 1, ell2 + 1]
+            Ls3 = [ell3 - 1, ell3 + 1]
 
         elif prim_type = 'sts':
-            
-            dLs1 = [-1, 1]
-            dLs2 = [-2, -1, 0, 1, 2]
-            dLs3 = [-1, 1]
 
+            Ls1 = [ell1 - 1, ell1 + 1]
+            Ls2 = range(ell2 - 2, ell2 + 3)
+            Ls3 = [ell3 - 1, ell3 + 1]
+            
         elif prim_type = 'sst':
-            
-            dLs1 = [-1, 1]
-            dLs2 = [-1, 1]
-            dLs3 = [-2, -1, 0, 1, 2]
 
-        for i, dL3 in enumerate([-2, -1, 0, 1, 2]):
-            for j, dL2 in enumerate([-1, 1]):
-                for k, dL1 in enumerate([-1, 1]):
+            Ls1 = [ell1 - 1, ell1 + 1]
+            Ls2 = [ell2 - 1, ell2 + 1]
+            Ls3 = range(ell3 - 2, ell3 + 3)
 
+        n = 0
+        for i, L3 in enumerate(Ls1):
+            for j, L2 in enumerate(Ls2):
+                for k, L1 in enumerate(Ls3):
+
+                    if (L1 + L2 + L3) % 2:
+                        # sum is odd
+                        Ls[n,:] = np.nan
+                        n += 1
+                        continue
                     
-                    idx = 9 * i + 3 * j + k
+                    # triangle condition on Ls
+                    elif not np.abs(L1 - L2) <= L3:
+                        Ls[n,:] = np.nan
+                        n += 1
+                        continue
+
+                    elif not L3 <= (L1 + L2):
+                        Ls[n,:] = np.nan
+                        n += 1
+                        continue
+
+                    Ls[n] = L1, L2, L3
+
+        # how does the fisher loop know which L's to skip
+        # depending on pol? I guess another if statemant there
+        return Ls
+
+    def binned_fisher(self):
+        '''
+        Loop over bins, and compute fisher        
+        '''
+
+        
+        
+        # probably MPI ell bins
+
+        
+        pass
 
 
+    
+    
     def init_ell(self):
         '''
         Precompute all valid l1, l2, l3 and 1/Delta
