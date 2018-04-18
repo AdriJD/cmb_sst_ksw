@@ -9,6 +9,7 @@ import numpy as np
 from scipy.special import spherical_jn
 from scipy.integrate import trapz
 from scipy.linalg import inv
+from scipy.stats import binned_statistic
 import camb_tools as ct
 import pywigxjpf as wig
 from beamconv import instrument as instr
@@ -454,7 +455,7 @@ class Fisher(Bispectrum):
         self.lmax = lmax
         self.lmin = lmin
         
-        lmax = 120 ########## NOTENOTE
+        lmax = 2000 ########## NOTENOTE
             
         # bins used in Meerburg 2016
         bins_0 = np.arange(lmin, 101, 1)
@@ -530,34 +531,7 @@ class Fisher(Bispectrum):
 
                 # reset array
                 ba[:] = True                                
-#                continue
-                #####
-               
-#                for ell3 in xrange(ell2, lmax+1):
-
-#                    # check parity
-#                    if parity is None:
-#                        pass
-#                    elif (ell1 + ell2 + ell3) % 2 != pmod:
-#                        continue
-
-                    # check triangle cond
-#                    if abs(ell1 - ell2) > ell3:
-#                        continue
-#                    if ell3 > (ell1 + ell2):
-#                        continue
-
-                    # which bin?
-                    # idx3 = np.argmax(ell3 < bins) - 1
-#                    idx3 = idx[ell3 - lmin]
-
-#                    num_pass[idx1,idx2,idx3] += 1
-
-#                    if num_pass[idx1,idx2,idx3] == 1:
-#                        # first good tuple, so store
-#                        first_pass[idx1,idx2,idx3,:] = ell1, ell2, ell3
         
-
         # now combine num_pass and first_pass on root
         if self.mpi:
             self.barrier()
@@ -614,10 +588,10 @@ class Fisher(Bispectrum):
         Stores shape = (ells, 3, 3) array. ells is unbinned.
         '''
 
-        cls = self.depo['cls'] # lmin = 2
-        nls = self.depo['nls']
+        cls = self.depo['cls'] # Signal, lmin = 2
+        nls = self.depo['nls'] # Noise
                 
-        lmin = self.depo['nls_lmin']
+        lmin = self.depo['nls_lmin'] 
         lmax = self.depo['nls_lmax']
 
         cls_lmax = self.depo['cls_lmax']
@@ -627,31 +601,57 @@ class Fisher(Bispectrum):
         nls = nls[:,:(lmax - lmin + 1)]
         cls = cls[:,lmin-2:lmax]
 
-        # cls for TB and TE not present in cls
+        # Add signal cov to noise (cls for TB and TE not present in cls)
         nls[:4,:] += cls
 
-        # first bin, then take inverse
         ells = np.arange(lmin, lmax+1)
         indices = np.digitize(ells, self.bins, right=False) - 1
 
-        cov = np.ones((ells.size, 3, 3))
-        cov *= np.nan
-        invcov = cov.copy()
-        
+        # first bin, then take inverse
+#        cov = np.ones((ells.size, 3, 3))
+#        cov *= np.nan
+#        invcov = cov.copy()
+
+        bins = self.bins
+
+#        bin_cov = np.ones((bins.size - 1, 3, 3))
+        bin_cov = np.ones((bins.size, 3, 3))
+        bin_cov *= np.nan
+        bin_invcov = bin_cov.copy()
+
         nls_dict = {'TT': 0, 'EE': 1, 'BB': 2, 'TE': 3,
                     'ET': 3, 'BT': 4, 'TB': 4, 'EB': 5,
                     'BE': 5}
-              
+        
         for pidx1, pol1 in enumerate(['T', 'E', 'B']):
             for pidx2, pol2 in enumerate(['T', 'E', 'B']):
 
+                # Cl+Nl array
                 nidx = nls_dict[pol1+pol2]
-                cov[:,pidx1,pidx2] = nls[nidx,indices]
+#                nell = nls[nidx,indices]
+                nell = nls[nidx,:]
 
-        for lidx in xrange(ells.size):
-            invcov[lidx,:] = inv(cov[lidx,:])
-            
+                # Bin
+                bin_cov[:-1,pidx1,pidx2], _, _ = binned_statistic(ells, nell,
+                                                             statistic='mean',
+                                                             bins=bins)
+
+        # Invert
+        for bidx in xrange(bins.size - 1):
+            bin_invcov[bidx,:] = inv(bin_cov[bidx,:])
+
+        # Expand to full size again                    
+        invcov = np.ones((ells.size, 3, 3))
+        invcov *= np.nan
+        cov = invcov.copy()
+        
+        invcov[:] = bin_invcov[indices,:]
+        cov[:] = bin_cov[indices,:]
         self.invcov = invcov
+        self.cov = cov
+        self.bin_cov = bin_cov
+        self.ells = ells
+        self.nls = nls
 
     def get_pol_invcov(self):
         '''
