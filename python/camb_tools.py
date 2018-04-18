@@ -67,14 +67,10 @@ def read_camb_output(source_dir, ttype='scalar'):
     num_sources = f.read_reals(np.int32)
     f.close()
     num_sources = num_sources[0]
-    print 'num_sources', num_sources
+
     # reshape and turn to c-contiguous 
     transfer = delta_p_l_k.reshape((num_sources, ell.size, k.size), order='F')
     transfer = np.ascontiguousarray(transfer)
-
-    # add monopole and dipole
-#    transfer_full = np.zeros((num_sources, lmax+1, k.size), dtype=transfer.dtype)
-#    transfer_full[:,2:,:] = transfer
 
     return transfer, lmax, k
 
@@ -106,7 +102,8 @@ def get_spectra(source_dir, tag='', lensed=True):
 
     if lensed:
         camb_name = 'lensedtotCls.dat'
-        # note that lensedtotCls also includes tensor contribution, lensedCl is just scalar
+        # note that lensedtotCls also includes tensor contribution, 
+        # lensedCl is just scalar
     else:
         camb_name = 'totCls.dat'
 
@@ -127,8 +124,36 @@ def get_spectra(source_dir, tag='', lensed=True):
     
     return cls, lmax
 
-def get_so_noise(tt_file, pol_file):
+def get_so_noise(tt_file=None, pol_file=None):
+    '''
+    Read in the SO noise curves
 
+    Arguments
+    ---------
+    tt_file : str
+        Path to txt file
+    pol_file : str
+        Path to txt file
+
+    Returns
+    -------
+    ell_tt : array-like
+        ell array for TT 
+    nl_tt : array-like
+        noise array for TT, same shape as ell_tt
+    ell_pol : array-like
+        ell array for EE and BB
+    nl_EE : array-like
+        noise array for EE, same shape as ell_pol
+    nl_BB : array-like
+        noise array for BB, same shape as ell_pol
+
+    Notes
+    -----
+    Assumes that TT textfile has colums as: ell, TT, yy
+    and pol txt file has ell, EE, BB. Ell is in steps of 1
+    '''
+    
     nl_tt = np.loadtxt(tt_file)
     nl_tt = nl_tt.transpose()
     nl_tt = np.ascontiguousarray(nl_tt)
@@ -141,18 +166,7 @@ def get_so_noise(tt_file, pol_file):
     nl_pol = np.ascontiguousarray(nl_pol)
 
     ell_pol = nl_pol[0]
-    nl_pol = nl_pol[1]
+    nl_ee = nl_pol[1]
+    nl_bb = nl_pol[1]
 
-    return ell_tt, nl_tt, ell_pol, nl_pol
-    
-    
-#cls = get_spectra('/mn/stornext/d8/ITA/spider/adri/analysis/20171217_sst/camb_output', tag='test', lensed=False)  
-#print cls[2,:]
-
-#tr, lmax, k = read_camb_output('/mn/stornext/d8/ITA/spider/adri/analysis/20171217_sst/camb_output', ttype='tensor')
-#print tr.shape
-#print k.shape
-#print k
-#print lmax
-#print tr.flags
-#print tr[0], tr[1], tr[2]
+    return ell_tt, nl_tt, ell_pol, nl_ee, nl_bb

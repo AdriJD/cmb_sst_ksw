@@ -52,7 +52,8 @@ class PreCalc(instr.MPIBase):
 
             cls, lmax = ct.get_spectra(source_dir, **kwargs)
 
-        self.cls = self.broadcast_array(cls)
+        cls = self.broadcast_array(cls)
+
         lmax = self.broadcast(lmax)
         
         self.depo['cls'] = cls
@@ -72,18 +73,20 @@ class PreCalc(instr.MPIBase):
                                 'lmax' : lmax,
                                 'k' : k}
 
-    def get_noise_curves(self, tt_file, pol_file):
+    def get_noise_curves(self, cross_noise=False, **kwargs):
         '''
         Load SO TT and pol noise curves and process
         into TT, EE, BB, TE, TB and EB noise curves
 
-        Arguments
+        Keyword Arguments
         ---------
+        cross_noise : bool
+            If set, TE, TB and EB elements get noise contribution
+            (sqrt(nl_XX nl_YY) (default : False)
         tt_file : str
             Path to TT file
         pol_file : str
             Path to EE, BB file
-
         '''
 
         nls = None
@@ -92,33 +95,50 @@ class PreCalc(instr.MPIBase):
         
         if self.mpi_rank == 0:
 
-            ell_tt, nl_tt, ell_pol, nl_pol = ct.get_so_noise(tt_file,
-                                                             pol_file)
-            # Make lmin equal
+            ell_tt, nl_tt, ell_pol, nl_ee, nl_bb = ct.get_so_noise(
+                                                           **kwargs)
+
+            # Make lmin and lmax equal
             lmin_tt = ell_tt[0]
             lmin_pol = ell_pol[0]
-            lmin = max(lmin_tt, lmin_pol)
+            lmax_tt = ell_tt[-1]
+            lmax_pol = ell_pol[-1]
 
-            # pol has lower lmin
-            nl_pol = nl_pol[ell_pol >= lmin]
+            lmin = max(lmin_tt, lmin_pol)
+            lmax = min(lmax_tt, lmax_pol)
+
+            # pol has lower lmin and higher lmax
+            nl_ee = nl_ee[ell_pol >= lmin]
+            nl_bb = nl_bb[ell_pol >= lmin]
             ell_pol = ell_pol[ell_pol >= lmin]
 
+            nl_ee = nl_ee[ell_pol <= lmax]
+            nl_bb = nl_bb[ell_pol <= lmax]
+            ell_pol = ell_pol[ell_pol <= lmax]
+
             # Compute noise spectra: TT, EE, BB, TE, TB, EB
-            nls = np.ones(6, ell_pol.size)
+            nls = np.ones((6, ell_pol.size))
             nls[0] = nl_tt
-            nls[1] = nl_pol
-            nls[2] = nl_pol
-            nls[3] = np.sqrt(nl_tt * nl_pol)
-            nls[4] = np.sqrt(nl_tt * nl_pol)
-            nls[5] = nl_pol
+            nls[1] = nl_ee
+            nls[2] = nl_bb
+
+            if cross_noise:
+                nls[3] = np.sqrt(nl_tt * nl_ee)
+                nls[4] = np.sqrt(nl_tt * nl_bb)
+                nls[5] = np.sqrt(nl_ee * nl_bb)
+            else:
+                nls[3] = np.zeros_like(nl_bb)
+                nls[4] = np.zeros_like(nl_bb)
+                nls[5] = np.zeros_like(nl_bb)
+
 
         nls = self.broadcast_array(nls)
         lmin = self.broadcast(lmin)
         lmax = self.broadcast(lmax)
 
         self.depo['nls'] = nls
-        self.depo['nls_lmin'] = lmin
-        self.depo['nls_lmax'] = lmax
+        self.depo['nls_lmin'] = int(lmin)
+        self.depo['nls_lmax'] = int(lmax)
             
             
     def get_default_radii(self):
@@ -371,11 +391,53 @@ class Bispectrum(PreCalc):
 
     
 
-class Fisher(Bispectrum, Experiment):
+#class Fisher(Bispectrum, Experiment):
+class Fisher(Bispectrum):
     
     def __init__(self, **kwargs):
-
+        tag = kwargs.pop('tag')
+        lensed = kwargs.pop('lensed')
+        camb_opts = dict(tag=tag, lensed=lensed)
+        
         super(Fisher, self).__init__(**kwargs)
+
+        self.get_camb_output(**camb_opts)
+        
+        # Initialize wigner tables
+#        wig.wig_table_init(2 * self.lmax + 100, 9)
+#        wig.wig_temp_init(2 * self.lmax + 100)
+        
+        
+    def init_bins(self, bins=None, parity='odd'):
+        '''
+        Create default ell bins. Stores attributes for
+        unique_ell, bins, num_pass and first_pass
+
+        Keyword Arguments
+        -----------------
+        bins : array-like
+            Lower value of bins in ell
+        parity : str
+            Consider tuples in ell that are parity "odd"
+            or "even". If None, use both. (default : "odd")
+
+        Notes
+        -----
+            Sum over ell is l1 <= l2 <= l3 
+        
+            unique_ell : array-like
+                Values of ell that are used (for alpha, beta)
+            bins : array-like
+                Bin multipoles (same as Meerbug 2016)
+            num_pass : array-like
+                   number of tuples per 3d bin that pass triangle
+                   condition. No parity check right now. 
+                   SIGMAi1i2i3 in bucher 2015.
+                   Shape : (nbins, nbins, nbins)
+            first_pass : array-like
+                   Lowest sum tuple per 3d bin that passes triangle
+                   condition. Shape : (nbins, nbins, nbins, 3)
+        '''
 
         # Determine lmin and lmax        
         lmax_s = self.depo['scalar']['lmax']
@@ -384,47 +446,21 @@ class Fisher(Bispectrum, Experiment):
         lmax_cl = self.depo['cls_lmax']
         
         lmax_nl = self.depo['nls_lmax']
-        lmin_nl = self.depo['cls_lmin']
+        lmin_nl = self.depo['nls_lmin']
 
-        self.lmax = min(lmax_s, lmax_t, lmax_cl, lmax_nl)
-        self.lmin = lmin_nl
-
-        # Initialize wigner tables
-        wig.wig_table_init(2 * self.lmax + 100, 9)
-        wig.wig_temp_init(2 * self.lmax + 100)
+        lmax = min(lmax_s, lmax_t, lmax_cl, lmax_nl)
+        lmin = lmin_nl
         
+        self.lmax = lmax
+        self.lmin = lmin
         
-    def init_bins(self, bins=None):
-        '''
-        Create default ell bins. Stores attributes for
-        unique_ell, bins, num_pass  and first_pass
-
-        Sum over ell is l1 <= l2 <= l3 
-        
-        unique_ell : array-like
-            Values of ell that are used (for alpha, beta)
-        bins : array-like
-            Bin multipoles (same as Meerbug 2016)
-        num_pass : array-like
-                   number of tuples per 3d bin that pass triangle
-                   condition. No parity check right now. 
-                   SIGMAi1i2i3 in bucher 2015.
-                   Shape : (nbins, nbins, nbins)
-        first_pass : array-like
-                   Lowest sum tuple per 3d bin that passes triangle
-                   condition. Shape : (nbins, nbins, nbins, 3)
-        '''
-        
-        lmax = self.lmax
-        lmin = self.lmin
-        
-        lmax = 1000 ########## NOTENOTE
+        lmax = 120 ########## NOTENOTE
             
         # bins used in Meerburg 2016
-        ell_0 = np.arange(lmin, 101, 1)
-        ell_1 = np.arange(110, 510, 10)
-        ell_2 = np.arange(520, 8000, 20)
-        bins = np.concatenate((ell_0, ell_1, ell_2))
+        bins_0 = np.arange(lmin, 101, 1)
+        bins_1 = np.arange(110, 510, 10)
+        bins_2 = np.arange(520, 8000, 20)
+        bins = np.concatenate((bins_0, bins_1, bins_2))
         
         max_bin = np.argmax(bins>lmax)        
         bins = bins[:max_bin]
@@ -435,12 +471,24 @@ class Fisher(Bispectrum, Experiment):
         # allocate space for first good tuple per 3d bin
         first_pass = np.zeros((num_bins, num_bins, num_bins, 3), dtype=int)
 
-        ells1 = np.arange(lmin, lmax+1)
+        if parity == 'odd':
+            pmod = 1
+        elif parity == 'even':
+            pmod = 0
+        else:
+            pmod = None
 
-        # calculate bins in parallel, split ell1
-        ells1_sub = ells1[self.mpi_rank::self.mpi_size]
+        # calculate bins in parallel, split ell in outer loop
+        ells = np.arange(lmin, lmax+1)
+        ells_sub = ells[self.mpi_rank::self.mpi_size]
 
-        for ell1 in ells1_sub:
+        # create an ell -> bin idx lookup table for 2nd loop
+        idx = np.digitize(ells, bins, right=False) - 1
+
+        # boolean index array for inner loop
+        ba = np.ones(ells.size, dtype=bool)
+
+        for ell1 in ells_sub:
             print 'rank: {}, ell: {}'.format(self.mpi_rank, ell1)
             # which bin?
             idx1 = np.argmax(ell1 < bins) - 1
@@ -448,21 +496,66 @@ class Fisher(Bispectrum, Experiment):
             for ell2 in xrange(ell1, lmax+1):
 
                 # which bin?
-                idx2 = np.argmax(ell2 < bins) - 1
+                idx2 = idx[ell2 - lmin]
+
+                # exclude ells below ell2
+                ba[:ell2-lmin+1] = False
+
+                # exclude parity odd/even 
+                if parity:
+                    if (ell1 + ell2) % 2:
+                        # sum is odd, l3 must be even if parity=odd
+                        ba[ells%2 == pmod] *= False
+                    else:
+                        # sum is even, l3 must be odd if parity=odd
+                        ba[~(ells%2 == pmod)] *= False
+
+                # exclude triangle 
+                ba[(abs(ell1 - ell2) > ells) | (ells > (ell1 + ell2))] *= False
                 
-                for ell3 in xrange(ell2, lmax+1):
-                    
+                # use boolean index array to determine good ell3s
+                gd_ells = ells[ba]                
+
+                # find number of good ells within bin
+                bin_idx = idx[ba] # for each good ell, index of corr. bin
+                # find position in bin_idx of first unique index
+                u_idx, first_idx, count = np.unique(bin_idx, return_index=True,
+                                          return_counts=True)
+                
+                num_pass[idx1,idx2,u_idx] = count
+                # first pass needs a (u_idx.size, 3) array
+                first_pass[idx1,idx2,u_idx,0] = ell1
+                first_pass[idx1,idx2,u_idx,1] = ell2
+                first_pass[idx1,idx2,u_idx,2] = gd_ells[first_idx]
+
+                # reset array
+                ba[:] = True                                
+#                continue
+                #####
+               
+#                for ell3 in xrange(ell2, lmax+1):
+
+#                    # check parity
+#                    if parity is None:
+#                        pass
+#                    elif (ell1 + ell2 + ell3) % 2 != pmod:
+#                        continue
+
                     # check triangle cond
-                    if np.abs(ell1 - ell2) <= ell3 <= ell1 + ell2:
-                        
-                        # which bin?
-                        idx3 = np.argmax(ell3 < bins) - 1
+#                    if abs(ell1 - ell2) > ell3:
+#                        continue
+#                    if ell3 > (ell1 + ell2):
+#                        continue
 
-                        num_pass[idx1,idx2,idx3] += 1
+                    # which bin?
+                    # idx3 = np.argmax(ell3 < bins) - 1
+#                    idx3 = idx[ell3 - lmin]
 
-                        if num_pass[idx1,idx2,idx3] == 1:
-                            # first good tuple, so store
-                            first_pass[idx1,idx2,idx3,:] = ell1, ell2, ell3
+#                    num_pass[idx1,idx2,idx3] += 1
+
+#                    if num_pass[idx1,idx2,idx3] == 1:
+#                        # first good tuple, so store
+#                        first_pass[idx1,idx2,idx3,:] = ell1, ell2, ell3
         
 
         # now combine num_pass and first_pass on root
@@ -493,7 +586,7 @@ class Fisher(Bispectrum, Experiment):
                     sum_rec = np.sum(first_pass_rec, axis=3)
 
                     mask = sum_rec <= sum_root                                        
-                    # exclude tuples whereh sum_rec is zero
+                    # exclude tuples where sum_rec is zero
                     mask *= (sum_rec != 0)
 
                     first_pass[mask,:] = first_pass_rec[mask,:]
@@ -504,6 +597,7 @@ class Fisher(Bispectrum, Experiment):
 
         self.barrier()
 
+        # trim away the zeros in first_pass
         self.unique_ell = np.unique(first_pass)[1:]
         self.bins = bins
         self.num_pass = num_pass
@@ -522,12 +616,15 @@ class Fisher(Bispectrum, Experiment):
 
         cls = self.depo['cls'] # lmin = 2
         nls = self.depo['nls']
-        
-        lmin = self.lmin
-        lmax = self.lmax
+                
+        lmin = self.depo['nls_lmin']
+        lmax = self.depo['nls_lmax']
+
+        cls_lmax = self.depo['cls_lmax']
+        lmax = min(lmax, cls_lmax)
 
         # assume nls start at lmin, cls at ell=2
-        nls = nls[:,:lmax - lmin + 1]
+        nls = nls[:,:(lmax - lmin + 1)]
         cls = cls[:,lmin-2:lmax]
 
         # cls for TB and TE not present in cls
@@ -535,31 +632,34 @@ class Fisher(Bispectrum, Experiment):
 
         # first bin, then take inverse
         ells = np.arange(lmin, lmax+1)
-        indices = np.digitize(ells, self.bins, left=True)
+        indices = np.digitize(ells, self.bins, right=False) - 1
 
         cov = np.ones((ells.size, 3, 3))
         cov *= np.nan
         invcov = cov.copy()
         
         nls_dict = {'TT': 0, 'EE': 1, 'BB': 2, 'TE': 3,
-                    'TB' : 4, 'EB': 5}
+                    'ET': 3, 'BT': 4, 'TB': 4, 'EB': 5,
+                    'BE': 5}
               
-        for pidx1, _ in enumerate(['T', 'E', 'B']):
-            for pidx2, _ in enumerate(['T', 'E', 'B']):
+        for pidx1, pol1 in enumerate(['T', 'E', 'B']):
+            for pidx2, pol2 in enumerate(['T', 'E', 'B']):
 
-                nidx = nls_dict[pidx1+pidx2]
+                nidx = nls_dict[pol1+pol2]
                 cov[:,pidx1,pidx2] = nls[nidx,indices]
 
-        for lidx, ell in ells:
+        for lidx in xrange(ells.size):
             invcov[lidx,:] = inv(cov[lidx,:])
             
         self.invcov = invcov
 
-    def get_pol_invcoc(self):
+    def get_pol_invcov(self):
         '''
         Calculate the inverse covariance matrix
         in pol tuple space
         '''
+
+        
         
     def get_Ls(ell1, ell2, ell3, prim_type):
         '''
@@ -578,19 +678,19 @@ class Fisher(Bispectrum, Experiment):
         '''
         Ls = np.empty(20, 3)
 
-        if prim_type = 'tss':
+        if prim_type == 'tss':
             
             Ls1 = range(ell1 - 2, ell1 + 3)
             Ls2 = [ell2 - 1, ell2 + 1]
             Ls3 = [ell3 - 1, ell3 + 1]
 
-        elif prim_type = 'sts':
+        elif prim_type == 'sts':
 
             Ls1 = [ell1 - 1, ell1 + 1]
             Ls2 = range(ell2 - 2, ell2 + 3)
             Ls3 = [ell3 - 1, ell3 + 1]
             
-        elif prim_type = 'sst':
+        elif prim_type == 'sst':
 
             Ls1 = [ell1 - 1, ell1 + 1]
             Ls2 = [ell2 - 1, ell2 + 1]
@@ -608,7 +708,7 @@ class Fisher(Bispectrum, Experiment):
                         continue
                     
                     # triangle condition on Ls
-                    elif not np.abs(L1 - L2) <= L3:
+                    elif not abs(L1 - L2) <= L3:
                         Ls[n,:] = np.nan
                         n += 1
                         continue
@@ -900,60 +1000,4 @@ class Fisher(Bispectrum, Experiment):
 
 if __name__ == '__main__':
 
-    pc = Fisher(camb_dir='/mn/stornext/d8/ITA/spider/adri/analysis/20171217_sst/camb_output/')
-    pc.get_camb_output(tag='test')
-
-
-    #print pc.cls
-    #print pc.depo['tensor']['k']
-    #print 'aap'
-    k = pc.depo['tensor']['k']
-    kt = pc.depo['scalar']['k']
-    beta = pc.beta(np.array([k, k, k]), 'tensor', [-1, 0, 1])
-
-    exit()
-
-    #print beta
-    #print beta.shape
-    #print beta.nbytes
-
-    print 'k'
-    print k.size
-    print kt.size
-
-
-
-    print pc.local().shape
-    #beta = pc.beta(pc.local(), 'tensor', [-1, 0, -1])
-    #pc.fisher()
-
-    pc.depo['tensor']['lmax'] = 250
-    pc.depo['scalar']['lmax'] = 250
-    
-    print 'amp', pc.scalar_amp
-    print pc.r
-
-
-    #ells, idelta =  pc.init_ell()
-    #print ells.shape
-    #print idelta.shape
-
-    #Ls, tri_cond = pc.init_Ls()
-    #print Ls.shape
-    #print tri_cond.shape
-
-    #pc.fisher()
-
-    #print Ls[tri_cond].shape
-
-    pc.init_wig3j()
-    print pc.pre_t.shape
-    print pc.pre_s.shape
-
-    pc.fisher_new()
-
-    DL1 = np.array([-1, 1])
-    DL2 = np.array([-1, 1])
-    DL3 = np.array([-2, -1, 0, 1, 2])
-
-    print pc.get_Ls(3, 5, 9, DL1, DL2, DL3)
+    pass
