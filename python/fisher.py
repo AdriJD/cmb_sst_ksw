@@ -1,5 +1,5 @@
 '''
-Calculate elements of a Fisher matrix for a bispectrum analysis, 
+Calculate elements of a Fisher matrix for a bispectrum analysis,
 add optimal estimator later on
 '''
 
@@ -18,9 +18,9 @@ opj = os.path.join
 
 class PreCalc(instr.MPIBase):
 #class PreCalc(object):
-    
+
     def __init__(self, camb_dir='.'):
-        '''        
+        '''
 
         Keyword arguments
         -----------------
@@ -42,7 +42,7 @@ class PreCalc(instr.MPIBase):
         kwargs : {get_spectra_opts}
         '''
         source_dir = self.camb_dir
-               
+
         lmax = None
         cls = None
         tr = None
@@ -56,13 +56,13 @@ class PreCalc(instr.MPIBase):
         cls = self.broadcast_array(cls)
 
         lmax = self.broadcast(lmax)
-        
+
         self.depo['cls'] = cls
         self.depo['cls_lmax'] = lmax
-        
+
         # load transfer functions and aux
         for ttype in ['scalar', 'tensor']:
-            
+
             if self.mpi_rank == 0:
                 tr, lmax, k = ct.read_camb_output(source_dir, ttype=ttype)
 
@@ -93,7 +93,7 @@ class PreCalc(instr.MPIBase):
         nls = None
         lmin = None
         lmax = None
-        
+
         if self.mpi_rank == 0:
 
             ell_tt, nl_tt, ell_pol, nl_ee, nl_bb = ct.get_so_noise(
@@ -140,8 +140,8 @@ class PreCalc(instr.MPIBase):
         self.depo['nls'] = nls
         self.depo['nls_lmin'] = int(lmin)
         self.depo['nls_lmax'] = int(lmax)
-            
-            
+
+
     def get_default_radii(self):
         '''
         Get the radii (in Mpc) used in table 1 of liquori 2007
@@ -153,7 +153,7 @@ class PreCalc(instr.MPIBase):
         rec = np.linspace(12632, 13682, num=300, dtype=float, endpoint=False)
 
         radii = np.concatenate((low, re1, re2, rec))
-        
+
         return radii
 
     def get_updated_radii(self):
@@ -169,14 +169,15 @@ class PreCalc(instr.MPIBase):
         rec_extra = np.linspace(14500, 18000, num=10, dtype=float, endpoint=False)
 
         radii = np.concatenate((low, re1, re2, rec, rec_new, rec_extra))
-        
+
         return radii
 
-    def beta(self, f, ttype, L_range=[0], radii=None):
+    def beta(self, f, L_range=[-2, -1, 0, 1, 2], radii=None, bin=True,
+             optimize=True):
         '''
         Calculate beta_l,L(r) = 2/pi * \int k^2 dk f(k) j_L(kr) T_X,l^(Z)(k).
         Vectorized. MPI'd by radius
-        
+
         Arguments
         ---------
         f : array-like
@@ -186,18 +187,26 @@ class PreCalc(instr.MPIBase):
         Keyword arguments
         -----------------
         radii : array-like
-            Array with radii to compute. In units [Mpc], if None, 
+            Array with radii to compute. In units [Mpc], if None,
             use default_radii (default : None)
         L_range : array-like, int
             Possible deviations from ell, e.g. [-2, -1, 0, 1, 2]
             (default : [0])
+        bin : bool
+            Bin the resulting beta in ell. (default : True)
         Returns
         -------
         beta : array-like
             beta_ell_L (r) array of shape (r.size, lmax+1, L.size)
         '''
 
-        # you want to allow f to be of shape (nfact, 3, k.size) 
+        if not self.depo['init_bins']:
+            raise ValueError('bins not initialized')
+
+        ells = self.ells
+        L_range = np.asarray(L_range)
+
+        # you want to allow f to be of shape (nfact, 3, k.size)
         ndim = f.ndim
         if ndim == 3:
             f = f.copy()
@@ -210,24 +219,30 @@ class PreCalc(instr.MPIBase):
 
         nfact = f.shape[0]
         ks = f.shape[1]
+        print f.shape
+        print ks
 
         if radii is None:
             radii = self.get_updated_radii()
 
-        k = self.depo[ttype]['k']
+        k = self.depo['scalar']['k']
         if k.size != f.shape[2]:
             raise ValueError('f and k not compatible: {}, {}'.format(
                     f.shape, k.shape))
-        
-        lmax = self.depo[ttype]['lmax']
-        L_range = np.asarray(L_range)
 
         # scale f by k^2
         k2 = k**2
         f *= k2
 
-        transfer = self.depo[ttype]['transfer']
-        pols = ['I', 'E', 'B'] if ttype == 'tensor' else ['I', 'E']
+        # allocate arrays for integral over k
+        tmp_s = np.zeros_like(k)
+        tmp_t = np.zeros_like(k)
+
+        # load both scalar and tensor transfer functions
+        transfer_s = self.depo['scalar']['transfer']
+        transfer_t = self.depo['tensor']['transfer'] 
+        pols_s = ['I', 'E']
+        pols_t = ['I', 'E', 'B']
 
         # Distribute radii among cores
         # do a weird split for more even load balance, larger r is slower
@@ -237,22 +252,22 @@ class PreCalc(instr.MPIBase):
         for rank in xrange(self.mpi_size):
             radii_per_rank.append(radii[rank::self.mpi_size])
 
-        # determine ells to loop over
-        if hasattr(self, 'unique_ell'):
-            ells = self.unique_ell
-        else:
-            ells = np.arange(2, lmax+1)
-
         # beta scalar and tensor
-        beta_s = np.zeros((ells.size, L_range.size, nfact, radii_sub.size, ks, len(pols)))
-        beta_t = np.zeros((ells.size, L_range.size, nfact, radii_sub.size, ks, len(pols)))
+        beta_s = np.zeros((ells.size, L_range.size, nfact, radii_sub.size, ks, len(pols_s)))
+        beta_t = np.zeros((ells.size, L_range.size, nfact, radii_sub.size, ks, len(pols_t)))
 
         # allocate space for bessel functions
         jL = np.zeros((L_range.size, k.size))
-        
+
+        # all arange with all possible L values
+        ells_ext = np.arange(ells[-1] + L_range[-1] + 1)
+
         for ridx, radius in enumerate(radii_sub):
-            
+
             kr = k * radius
+            # Array that gives L -> kr idx mapping
+            kr_idx = np.digitize(ells_ext, bins=kr, right=True)
+            kr_idx[kr_idx == kr.size] = kr.size - 1
 
             print 'rank: {}, ridx: {}, radius: {} Mpc'.format(self.mpi_rank, ridx, radius)
 
@@ -263,32 +278,70 @@ class PreCalc(instr.MPIBase):
                     L = ell + L
                     if L < 0:
                         continue
-    
-#                    if lidx == 0:
-#                        # first pass, fill all
-#                        jL[Lidx] = spherical_jn(L, kr)
-#                    else:
-#                        # second pass only fill new row
-#                        if Lidx == L_range.size - 1:
-#                            jL[Lidx] = spherical_jn(L, kr)
-#                        else:
-#                            pass
-                    
-                    jL[Lidx] = spherical_jn(L, kr)
+
+                    # spherical bessel is zero for kr << L
+                    # so dont waste time calculating those values
+                    if optimize:
+                        if L < 20:
+                            kmin_idx = 0
+                        elif L < 100:
+                            kmin_idx = kr_idx[int(0.5 * L)]
+                        elif L < 500:
+                            kmin_idx = kr_idx[int(0.75 * L)]
+                        elif L < 1000:
+                            kmin_idx = kr_idx[int(0.8 * L)]
+                        else:
+                            kmin_idx = kr_idx[int(0.9 * L)]
+                    else:
+                        kmin_idx = 0
+
+                    if lidx == 0:
+                        # first pass, fill all
+                        jL[Lidx,kmin_idx:] = spherical_jn(L, kr[kmin_idx:])
+                    else:
+                        # second pass only fill new row
+                        if Lidx == L_range.size - 1:
+                            jL[Lidx,:] *= 0.
+                            jL[Lidx,kmin_idx:] = spherical_jn(L, kr[kmin_idx:])
 
                     # loop over T, E, B
-                    for pidx, pol in enumerate(pols):
+                    for pidx, pol in enumerate(pols_t):
+                        
+                        if pol != 'B':
+                            tmp_s[kmin_idx:] = transfer_s[pidx,ell-2,kmin_idx:]
+                            tmp_s[kmin_idx:] *= jL[Lidx,kmin_idx:]
 
+                        tmp_t[kmin_idx:] = transfer_t[pidx,ell-2,kmin_idx:]
+                        tmp_t[kmin_idx:] *= jL[Lidx,kmin_idx:]
+                        
                         for nidx in xrange(nfact):
                             for kidx in xrange(ks):
 
-                                b_int = trapz(transfer[pidx,ell-2,:] * f[nidx, kidx, :] * jL[Lidx], k)
-                                beta[lidx, Lidx, nidx, ridx, kidx, pidx] = b_int
- 
-#                # permute rows such that oldest row can be replaced next ell
-#                jL = np.roll(jL, -1, axis=0)
+                                if pol != 'B':
+                                    # scalars
+#                                    integrand_s = (transfer_s[pidx,ell-2,kmin_idx:] *
+#                                                   f[nidx, kidx, kmin_idx:] * jL[Lidx,kmin_idx:])
+#                                    b_int_s = trapz(integrand_s, k[kmin_idx:])
+                                    integrand_s = tmp_s[kmin_idx:] * f[nidx,kidx,kmin_idx:]
+#                                    b_int_s = trapz(integrand_s[kmin_idx:], k[kmin_idx:])
+                                    b_int_s = trapz(integrand_s, k[kmin_idx:])
 
-        beta *= (2 / np.pi)
+                                    beta_s[lidx,Lidx,nidx,ridx,kidx,pidx] = b_int_s
+
+                                # tensors
+#                                integrand_t = (transfer_t[pidx,ell-2,kmin_idx:] *
+#                                             f[nidx, kidx, kmin_idx:] * jL[Lidx,kmin_idx:])
+#                                b_int_t = trapz(integrand_t, k[kmin_idx:])
+                                integrand_t = tmp_t[kmin_idx:] * f[nidx,kidx,kmin_idx:]
+#                                b_int_t = trapz(integrand_t[kmin_idx:], k[kmin_idx:])
+                                b_int_t = trapz(integrand_t, k[kmin_idx:])
+                                beta_t[lidx,Lidx,nidx,ridx,kidx,pidx] = b_int_t
+
+                # permute rows such that oldest row can be replaced next ell
+                jL = np.roll(jL, -1, axis=0)
+
+        beta_s *= (2 / np.pi)
+        beta_t *= (2 / np.pi)
 
         # Combine all sub range betas on root if mpi
         if self.mpi:
@@ -296,31 +349,40 @@ class PreCalc(instr.MPIBase):
 
             # create full size beta on root
             if self.mpi_rank == 0:
-                beta_full = np.zeros((ells.size, L_range.size, nfact, radii.size, ks, len(pols)))
+                beta_s_full = np.zeros((ells.size, L_range.size, nfact,
+                                        radii.size, ks, len(pols_s)))
+                beta_t_full = np.zeros((ells.size, L_range.size, nfact,
+                                        radii.size, ks, len(pols_t)))
 
                 # already place root beta sub into beta_full
                 for ridx, radius in enumerate(radii_per_rank[0]):
                     # find radius index in total radii
                     ridx_tot, = np.where(radii == radius)[0]
-                    beta_full[:,:,:,ridx_tot,:,:] = beta[:,:,:,ridx,:,:]
+                    beta_s_full[:,:,:,ridx_tot,:,:] = beta_s[:,:,:,ridx,:,:]
+                    beta_t_full[:,:,:,ridx_tot,:,:] = beta_t[:,:,:,ridx,:,:]
             else:
-                beta_full = None
+                beta_s_full = None
+                beta_t_full = None
 
             # loop over all non-root ranks
             for rank in xrange(1, self.mpi_size):
 
-                # allocate space for sub beta on root         
-                if self.mpi_rank == 0:                    
+                # allocate space for sub beta on root
+                if self.mpi_rank == 0:
                     r_size = radii_per_rank[rank].size
-                    sub_beta = np.ones((ells.size, L_range.size, nfact, r_size, ks, len(pols)))
-                    sub_beta *= np.nan
+                    beta_s_sub = np.ones((ells.size, L_range.size, nfact, r_size, ks, len(pols_s)))
+                    beta_t_sub = np.ones((ells.size, L_range.size, nfact, r_size, ks, len(pols_t)))
+                    beta_s_sub *= np.nan
+                    beta_t_sub *= np.nan
 
-                # send sub beta to root
+                # send beta_sub to root
                 if self.mpi_rank == rank:
-                    self._comm.Send(beta, dest=0, tag=rank)
+                    self._comm.Send(beta_s, dest=0, tag=rank)
+                    self._comm.Send(beta_t, dest=0, tag=rank + self.mpi_size + 1)
 
                 if self.mpi_rank == 0:
-                    self._comm.Recv(sub_beta, source=rank, tag=rank)
+                    self._comm.Recv(beta_s_sub, source=rank, tag=rank)
+                    self._comm.Recv(beta_t_sub, source=rank, tag=rank + self.mpi_size + 1)
 
                     # place into beta_full
                     for ridx, radius in enumerate(radii_per_rank[rank]):
@@ -328,21 +390,72 @@ class PreCalc(instr.MPIBase):
                         # find radius index in total radii
                         ridx_tot, = np.where(radii == radius)[0]
 
-                        beta_full[:,:,:,ridx_tot,:,:] = sub_beta[:,:,:,ridx,:,:]
+                        beta_s_full[:,:,:,ridx_tot,:,:] = beta_s_sub[:,:,:,ridx,:,:]
+                        beta_t_full[:,:,:,ridx_tot,:,:] = beta_t_sub[:,:,:,ridx,:,:]
 
             # broadcast full beta array to all ranks
-            beta = self.broadcast_array(beta_full)
-        
-        print beta.shape
-        self.depo[ttype]['beta'] = beta
-        return beta
+            beta_s = self.broadcast_array(beta_s_full)
+            beta_t = self.broadcast_array(beta_t_full)
 
+        if not bin:
+            self.depo['scalar']['beta'] = beta_s
+            self.depo['tensor']['beta'] = beta_t
+            return
+            
+        # Bin beta
+        bins = self.bins
+        indices = np.digitize(ells, bins, right=False) - 1
+
+        beta_s_f = np.asfortranarray(beta_s)
+        beta_t_f = np.asfortranarray(beta_t)
+
+        b_beta_s_f = np.zeros((bins.size, L_range.size, nfact, radii_sub.size, ks, len(pols_s)))
+        b_beta_t_f = np.zeros((bins.size, L_range.size, nfact, radii_sub.size, ks, len(pols_t)))
+
+        b_beta_s_f = np.asfortranarray(b_beta_s_f)
+        b_beta_t_f = np.asfortranarray(b_beta_t_f)
+
+        for pidx, pol in enumerate(pols_s):
+            for kidx in xrange(ks):
+                for ridx, radius in enumerate(radii_sub):
+                    for nidx in xrange(nfact):
+                        for Lidx, L in enumerate(L_range):
+
+                            if pol != 'B':
+                                # scalar
+                                tmp_beta = beta_s_f[:,Lidx,nidx,ridx,kidx,pidx]
+
+                                b_beta_s_f[:-1,Lidx,nidx,ridx,kidx,pidx], _, _ = \
+                                    binned_statistic(ells, tmp_beta, statistic='mean',
+                                                     bins=bins)
+
+                                # expand to full size    
+                                beta_s_f[:,Lidx,nidx,ridx,kidx,pidx] = \
+                                    b_beta_s_f[indices,Lidx,nidx,ridx,kidx,pidx]
+
+                            # tensor
+                            tmp_beta = beta_t_f[:,Lidx,nidx,ridx,kidx,pidx]
+
+                            b_beta_t_f[:-1,Lidx,nidx,ridx,kidx,pidx], _, _ = \
+                                binned_statistic(ells, tmp_beta, statistic='mean',
+                                                 bins=bins)
+                            # expand to full size    
+                            beta_t_f[:,Lidx,nidx,ridx,kidx,pidx] = \
+                                b_beta_t_f[indices,Lidx,nidx,ridx,kidx,pidx]
+
+        beta_s = np.ascontiguousarray(beta_s_f)
+        beta_t = np.ascontiguousarray(beta_t_f)
+
+        self.depo['scalar']['beta'] = beta_s
+        self.depo['tensor']['beta'] = beta_t
+        
+        return 
 
 #class Experiment(object):
 #    '''
 #    Experimental details such as noise, fsky, pol
 #    '''
-#    
+#
 #    def __init__(self, fsky=1.):
 #
 #        self.fsky = fsky
@@ -360,20 +473,22 @@ class Bispectrum(PreCalc):
     '''
 
     def __init__(self, **kwargs):
-        
+
         self.scalar_amp = 2.1e-9
         self.ns = 0.96
         self.nt = 0
         self.r = 0.03
-        
+
         super(Bispectrum, self).__init__(**kwargs)
+
+        self.depo['init_bins'] = False
 
     def local(self, fnl=1):
         '''
         eq. 18 from Meerburg 2016 without the angular
         dependent parts and I = local
         '''
-        
+
         amp = (2 * np.pi)**3 * 16 * np.pi**4 * self.scalar_amp * np.sqrt(self.r)
         amp *= fnl
 
@@ -387,28 +502,39 @@ class Bispectrum(PreCalc):
         km3 *= amp
         template = np.asarray([km3, ones])
 #        template *= amp
-        
+
         return template
 
-    
+    def equilateral(self, fnl=1):
+        '''
+        
+        '''
+
+        pass
+
+    def orthogonal(self, fnl=1):
+        '''
+        
+        '''
+        pass
 
 #class Fisher(Bispectrum, Experiment):
 class Fisher(Bispectrum):
-    
+
     def __init__(self, **kwargs):
         tag = kwargs.pop('tag')
         lensed = kwargs.pop('lensed')
         camb_opts = dict(tag=tag, lensed=lensed)
-        
+
         super(Fisher, self).__init__(**kwargs)
 
         self.get_camb_output(**camb_opts)
-        
+
         # Initialize wigner tables
 #        wig.wig_table_init(2 * self.lmax + 100, 9)
 #        wig.wig_temp_init(2 * self.lmax + 100)
-        
-        
+
+
     def init_bins(self, bins=None, parity='odd'):
         '''
         Create default ell bins. Stores attributes for
@@ -424,15 +550,15 @@ class Fisher(Bispectrum):
 
         Notes
         -----
-            Sum over ell is l1 <= l2 <= l3 
-        
+            Sum over ell is l1 <= l2 <= l3
+
             unique_ell : array-like
                 Values of ell that are used (for alpha, beta)
             bins : array-like
                 Bin multipoles (same as Meerbug 2016)
             num_pass : array-like
                    number of tuples per 3d bin that pass triangle
-                   condition. No parity check right now. 
+                   condition. No parity check right now.
                    SIGMAi1i2i3 in bucher 2015.
                    Shape : (nbins, nbins, nbins)
             first_pass : array-like
@@ -440,35 +566,35 @@ class Fisher(Bispectrum):
                    condition. Shape : (nbins, nbins, nbins, 3)
         '''
 
-        # Determine lmin and lmax        
+        # Determine lmin and lmax
         lmax_s = self.depo['scalar']['lmax']
         lmax_t = self.depo['tensor']['lmax']
 
         lmax_cl = self.depo['cls_lmax']
-        
+
         lmax_nl = self.depo['nls_lmax']
         lmin_nl = self.depo['nls_lmin']
 
         lmax = min(lmax_s, lmax_t, lmax_cl, lmax_nl)
         lmin = lmin_nl
-        
+
         self.lmax = lmax
         self.lmin = lmin
-        
-        lmax = 2000 ########## NOTENOTE
-            
+
+        lmax = 500 ########## NOTENOTE
+
         # bins used in Meerburg 2016
         bins_0 = np.arange(lmin, 101, 1)
         bins_1 = np.arange(110, 510, 10)
         bins_2 = np.arange(520, 8000, 20)
         bins = np.concatenate((bins_0, bins_1, bins_2))
-        
-        max_bin = np.argmax(bins>lmax)        
+
+        max_bin = np.argmax(bins>lmax)
         bins = bins[:max_bin]
 
-        num_bins = bins.size        
+        num_bins = bins.size
         # allocate space for number of good tuples per 3d bin
-        num_pass = np.zeros((num_bins, num_bins, num_bins), dtype=int) 
+        num_pass = np.zeros((num_bins, num_bins, num_bins), dtype=int)
         # allocate space for first good tuple per 3d bin
         first_pass = np.zeros((num_bins, num_bins, num_bins, 3), dtype=int)
 
@@ -481,6 +607,7 @@ class Fisher(Bispectrum):
 
         # calculate bins in parallel, split ell in outer loop
         ells = np.arange(lmin, lmax+1)
+        self.ells = ells
         ells_sub = ells[self.mpi_rank::self.mpi_size]
 
         # create an ell -> bin idx lookup table for 2nd loop
@@ -502,7 +629,7 @@ class Fisher(Bispectrum):
                 # exclude ells below ell2
                 ba[:ell2-lmin+1] = False
 
-                # exclude parity odd/even 
+                # exclude parity odd/even
                 if parity:
                     if (ell1 + ell2) % 2:
                         # sum is odd, l3 must be even if parity=odd
@@ -511,18 +638,18 @@ class Fisher(Bispectrum):
                         # sum is even, l3 must be odd if parity=odd
                         ba[~(ells%2 == pmod)] *= False
 
-                # exclude triangle 
+                # exclude triangle
                 ba[(abs(ell1 - ell2) > ells) | (ells > (ell1 + ell2))] *= False
-                
+
                 # use boolean index array to determine good ell3s
-                gd_ells = ells[ba]                
+                gd_ells = ells[ba]
 
                 # find number of good ells within bin
                 bin_idx = idx[ba] # for each good ell, index of corr. bin
                 # find position in bin_idx of first unique index
                 u_idx, first_idx, count = np.unique(bin_idx, return_index=True,
                                           return_counts=True)
-                
+
                 num_pass[idx1,idx2,u_idx] = count
                 # first pass needs a (u_idx.size, 3) array
                 first_pass[idx1,idx2,u_idx,0] = ell1
@@ -530,20 +657,20 @@ class Fisher(Bispectrum):
                 first_pass[idx1,idx2,u_idx,2] = gd_ells[first_idx]
 
                 # reset array
-                ba[:] = True                                
-        
+                ba[:] = True
+
         # now combine num_pass and first_pass on root
         if self.mpi:
             self.barrier()
 
             # allocate space to receive arrays on root
-            if self.mpi_rank == 0:                    
+            if self.mpi_rank == 0:
                 num_pass_rec = np.zeros_like(num_pass)
                 first_pass_rec = np.zeros_like(first_pass)
-            
+
             # loop over all non-root ranks
             for rank in xrange(1, self.mpi_size):
-            
+
                 # send arrays to root
                 if self.mpi_rank == rank:
                     self._comm.Send(num_pass, dest=0, tag=rank)
@@ -552,14 +679,14 @@ class Fisher(Bispectrum):
                 if self.mpi_rank == 0:
                     self._comm.Recv(num_pass_rec, source=rank, tag=rank)
                     self._comm.Recv(first_pass_rec, source=rank, tag=rank + self.mpi_size)
-                    
+
                     # simply add num_pass but only take first pass if lower
                     num_pass += num_pass_rec
-                    
+
                     sum_root = np.sum(first_pass, axis=3)
                     sum_rec = np.sum(first_pass_rec, axis=3)
 
-                    mask = sum_rec <= sum_root                                        
+                    mask = sum_rec <= sum_root
                     # exclude tuples where sum_rec is zero
                     mask *= (sum_rec != 0)
 
@@ -577,6 +704,7 @@ class Fisher(Bispectrum):
         self.num_pass = num_pass
         self.first_pass = first_pass
 
+        self.depo['init_bins'] = True
 
     def get_binned_invcov(self):
         '''
@@ -588,24 +716,28 @@ class Fisher(Bispectrum):
         Stores shape = (ells, 3, 3) array. ells is unbinned.
         '''
 
+#        ells = np.arange(lmin, lmax+1)
+        ells = self.ells
+        indices = np.digitize(ells, self.bins, right=False) - 1
+
         cls = self.depo['cls'] # Signal, lmin = 2
         nls = self.depo['nls'] # Noise
-                
-        lmin = self.depo['nls_lmin'] 
-        lmax = self.depo['nls_lmax']
 
-        cls_lmax = self.depo['cls_lmax']
-        lmax = min(lmax, cls_lmax)
+#        lmin = self.depo['nls_lmin']
+#        lmax = self.depo['nls_lmax']
+        lmin = ells[0]
+        lmax = ells[-1]
+
+#        cls_lmax = self.depo['cls_lmax']
+#        lmax = min(lmax, cls_lmax)
 
         # assume nls start at lmin, cls at ell=2
         nls = nls[:,:(lmax - lmin + 1)]
-        cls = cls[:,lmin-2:lmax]
+        cls = cls[:,lmin-2:lmax-1]
 
         # Add signal cov to noise (cls for TB and TE not present in cls)
         nls[:4,:] += cls
 
-        ells = np.arange(lmin, lmax+1)
-        indices = np.digitize(ells, self.bins, right=False) - 1
 
         # first bin, then take inverse
 #        cov = np.ones((ells.size, 3, 3))
@@ -622,7 +754,7 @@ class Fisher(Bispectrum):
         nls_dict = {'TT': 0, 'EE': 1, 'BB': 2, 'TE': 3,
                     'ET': 3, 'BT': 4, 'TB': 4, 'EB': 5,
                     'BE': 5}
-        
+
         for pidx1, pol1 in enumerate(['T', 'E', 'B']):
             for pidx2, pol2 in enumerate(['T', 'E', 'B']):
 
@@ -640,27 +772,19 @@ class Fisher(Bispectrum):
         for bidx in xrange(bins.size - 1):
             bin_invcov[bidx,:] = inv(bin_cov[bidx,:])
 
-        # Expand to full size again                    
+        # Expand binned inverse cov and cov to full size again
         invcov = np.ones((ells.size, 3, 3))
         invcov *= np.nan
         cov = invcov.copy()
-        
         invcov[:] = bin_invcov[indices,:]
         cov[:] = bin_cov[indices,:]
+
         self.invcov = invcov
         self.cov = cov
         self.bin_cov = bin_cov
         self.ells = ells
         self.nls = nls
 
-    def get_pol_invcov(self):
-        '''
-        Calculate the inverse covariance matrix
-        in pol tuple space
-        '''
-
-        
-        
     def get_Ls(ell1, ell2, ell3, prim_type):
         '''
         Arguments
@@ -673,13 +797,13 @@ class Fisher(Bispectrum):
         Returns
         -------
         Ls : array-like
-            Shape (20, 3), nan where triangle cond is not met 
+            Shape (20, 3), nan where triangle cond is not met
             or sum is odd.
         '''
         Ls = np.empty(20, 3)
 
         if prim_type == 'tss':
-            
+
             Ls1 = range(ell1 - 2, ell1 + 3)
             Ls2 = [ell2 - 1, ell2 + 1]
             Ls3 = [ell3 - 1, ell3 + 1]
@@ -689,7 +813,7 @@ class Fisher(Bispectrum):
             Ls1 = [ell1 - 1, ell1 + 1]
             Ls2 = range(ell2 - 2, ell2 + 3)
             Ls3 = [ell3 - 1, ell3 + 1]
-            
+
         elif prim_type == 'sst':
 
             Ls1 = [ell1 - 1, ell1 + 1]
@@ -706,7 +830,7 @@ class Fisher(Bispectrum):
                         Ls[n,:] = np.nan
                         n += 1
                         continue
-                    
+
                     # triangle condition on Ls
                     elif not abs(L1 - L2) <= L3:
                         Ls[n,:] = np.nan
@@ -726,19 +850,19 @@ class Fisher(Bispectrum):
 
     def binned_fisher(self):
         '''
-        Loop over bins, and compute fisher        
+        Loop over bins, and compute fisher
         '''
 
-        
-        
+
+
         # probably MPI ell bins
 
-        
+
         pass
 
 
-    
-    
+
+
     def init_ell(self):
         '''
         Precompute all valid l1, l2, l3 and 1/Delta
@@ -747,12 +871,12 @@ class Fisher(Bispectrum):
 
         lmax_s = self.depo['scalar']['lmax']
         lmax_t = self.depo['tensor']['lmax']
-        
+
         ells = []
         idelta = []
 
         print 'determining l1, l2, l3 and 1/Delta'
-        
+
         for l1 in xrange(2, lmax_s+1):
 
             for l2 in xrange(2, l1+1):
@@ -773,9 +897,9 @@ class Fisher(Bispectrum):
 
         idelta = np.asarray(idelta)
         idelta = np.ascontiguousarray(idelta)
-        
+
         print 'done'
-        
+
         self.ells = ells
         self.idelta = idelta
 
@@ -786,7 +910,7 @@ class Fisher(Bispectrum):
         Get L1, L2, L3 that pass triangle condition
         with themselves and other 3 wigner 3js.
         '''
-        
+
         print 'determining L1, L2, L3'
         num_ells = self.ells.shape[0]
         print num_ells
@@ -794,13 +918,13 @@ class Fisher(Bispectrum):
         l2 = self.ells[:,1]
         l3 = self.ells[:,2]
 
-        Ls = np.zeros((num_ells, 20, 3), dtype=int) # 2 * 2 * 5 
-        tri_cond = np.ones((num_ells, 20), dtype=bool) 
-        
+        Ls = np.zeros((num_ells, 20, 3), dtype=int) # 2 * 2 * 5
+        tri_cond = np.ones((num_ells, 20), dtype=bool)
+
         for i, dL3 in enumerate([-2, -1, 0, 1, 2]):
             for j, dL2 in enumerate([-1, 1]):
                 for k, dL1 in enumerate([-1, 1]):
-                    
+
                     L1 = l1 + dL1
                     L2 = l2 + dL2
                     L3 = l3 + dL3
@@ -818,7 +942,7 @@ class Fisher(Bispectrum):
                     # sum must be even
                     even_cond = np.mod(L1 + L2 + L3, 2) - 1
                     tri_cond[:,idx] *= even_cond.astype(bool)
-                                        
+
         Ls = np.ascontiguousarray(Ls)
         tri_cond = np.ascontiguousarray(tri_cond)
 
@@ -836,7 +960,7 @@ class Fisher(Bispectrum):
 
         lmax_s = self.depo['scalar']['lmax']
         lmax_t = self.depo['tensor']['lmax']
-        
+
         ells = np.arange(2, lmax_s+1)
         ells *= 2 # for wign
 
@@ -850,12 +974,12 @@ class Fisher(Bispectrum):
         pre_t /= (2 * np.pi)
 
 
-        for lidx, ell in enumerate(ells):            
+        for lidx, ell in enumerate(ells):
 
             for Lidx, dL in enumerate([-1, 1]):
 
                 L = ell + 2 * dL # factor 2 for wign
-                                
+
                 pre_s[lidx, Lidx] *= np.sqrt((L + 1) * (ell + 1))
                 pre_s[lidx, Lidx] *= wig.wig3jj([ell, L, 2, 2, 0, -2])
 
@@ -863,10 +987,10 @@ class Fisher(Bispectrum):
                 # note that ell = 2l, L = 2L
 
                 L = ell + 2 * dL # factor 2 for wign
-                                
+
                 pre_t[lidx, Lidx] *= np.sqrt((L + 1) * (ell + 1))
-                pre_t[lidx, Lidx] *= wig.wig3jj([ell, L, 4, 4, 0, -4])                
-                
+                pre_t[lidx, Lidx] *= wig.wig3jj([ell, L, 4, 4, 0, -4])
+
         self.pre_s = pre_s
         self.pre_t = pre_t
 
@@ -878,24 +1002,24 @@ class Fisher(Bispectrum):
             return 1/6.
         else:
             return 0.5
-        
+
     def get_Ls(self, l1, l2, l3, DL1, DL2, DL3):
         '''
         DL : array-like
             e.g. [-2, -1, 0, 1, 2]
-        '''        
-        
+        '''
+
         L1 = DL1 + l1
         L2 = DL2 + l2
         L3 = DL3 + l3
 
-        return np.array(np.meshgrid(L1, L2, L3)).T.reshape(-1,3)        
-                    
+        return np.array(np.meshgrid(L1, L2, L3)).T.reshape(-1,3)
+
     def fisher_new(self):
 
         lmax_s = self.depo['scalar']['lmax']
         lmax_t = self.depo['tensor']['lmax']
-        
+
         fisher_tot = 512 * np.pi**3 / 9.
 
         DL1 = np.array([-1, 1])
@@ -925,8 +1049,8 @@ class Fisher(Bispectrum):
                         continue
 
                     idx3 = l3 - 2
-                    
-                    fisher = self.inverse_delta(l1, l2, l3)  
+
+                    fisher = self.inverse_delta(l1, l2, l3)
 
                     arg9j[0:3] = l1, l2, l3
                     arg9j[0:3] *= 2
@@ -935,14 +1059,14 @@ class Fisher(Bispectrum):
                     Ls = self.get_Ls(l1, l2, l3, DL1, DL2, DL3)
 
                     for idx, (L1, L2, L3) in enumerate(Ls):
-                        
+
                         # L1 L2 L3 0 0 0 wigner
                         tmp[idx] = wig.wig3jj([2*L1, 2*L2, 2*L3, 0, 0, 0])
 #                        tmp = 1
                         # triangle condition on L1 L2 L3 and sum(L) is even
                         if not tmp[idx]:
                             continue
-                        
+
                         # 9j
                         arg9j[3:6] = L1, L2, L3
                         arg9j[3:6] *= 2
@@ -996,7 +1120,7 @@ class Fisher(Bispectrum):
                         print L1, L2, L3, L4, L5, L6, n
                         n+= 1
 
-    
+
 
 if __name__ == '__main__':
 
