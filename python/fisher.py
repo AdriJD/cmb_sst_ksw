@@ -319,21 +319,13 @@ class PreCalc(instr.MPIBase):
 
                                 if pol != 'B':
                                     # scalars
-#                                    integrand_s = (transfer_s[pidx,ell-2,kmin_idx:] *
-#                                                   f[nidx, kidx, kmin_idx:] * jL[Lidx,kmin_idx:])
-#                                    b_int_s = trapz(integrand_s, k[kmin_idx:])
-                                    integrand_s = tmp_s[kmin_idx:] * f[nidx,kidx,kmin_idx:]
-#                                    b_int_s = trapz(integrand_s[kmin_idx:], k[kmin_idx:])
-                                    b_int_s = trapz(integrand_s, k[kmin_idx:])
 
+                                    integrand_s = tmp_s[kmin_idx:] * f[nidx,kidx,kmin_idx:]
+                                    b_int_s = trapz(integrand_s, k[kmin_idx:])
                                     beta_s[lidx,Lidx,nidx,ridx,kidx,pidx] = b_int_s
 
                                 # tensors
-#                                integrand_t = (transfer_t[pidx,ell-2,kmin_idx:] *
-#                                             f[nidx, kidx, kmin_idx:] * jL[Lidx,kmin_idx:])
-#                                b_int_t = trapz(integrand_t, k[kmin_idx:])
                                 integrand_t = tmp_t[kmin_idx:] * f[nidx,kidx,kmin_idx:]
-#                                b_int_t = trapz(integrand_t[kmin_idx:], k[kmin_idx:])
                                 b_int_t = trapz(integrand_t, k[kmin_idx:])
                                 beta_t[lidx,Lidx,nidx,ridx,kidx,pidx] = b_int_t
 
@@ -446,8 +438,15 @@ class PreCalc(instr.MPIBase):
         beta_s = np.ascontiguousarray(beta_s_f)
         beta_t = np.ascontiguousarray(beta_t_f)
 
+        b_beta_s = np.ascontiguousarray(b_beta_s_f)
+        b_beta_t = np.ascontiguousarray(b_beta_t_f)
+
         self.depo['scalar']['beta'] = beta_s
         self.depo['tensor']['beta'] = beta_t
+
+        # binned versions
+        self.depo['scalar']['b_beta'] = b_beta_s
+        self.depo['tensor']['b_beta'] = b_beta_t
         
         return 
 
@@ -530,15 +529,15 @@ class Fisher(Bispectrum):
 
         self.get_camb_output(**camb_opts)
 
-        # Initialize wigner tables
-#        wig.wig_table_init(2 * self.lmax + 100, 9)
-#        wig.wig_temp_init(2 * self.lmax + 100)
+        # Initialize wigner tables for lmax=8000
+        wig.wig_table_init(2 * 8000, 9)
+        wig.wig_temp_init(2 * 8000)
 
 
     def init_bins(self, bins=None, parity='odd'):
         '''
         Create default ell bins. Stores attributes for
-        unique_ell, bins, num_pass and first_pass
+        unique_ells, bins, num_pass and first_pass
 
         Keyword Arguments
         -----------------
@@ -552,7 +551,7 @@ class Fisher(Bispectrum):
         -----
             Sum over ell is l1 <= l2 <= l3
 
-            unique_ell : array-like
+            unique_ells : array-like
                 Values of ell that are used (for alpha, beta)
             bins : array-like
                 Bin multipoles (same as Meerbug 2016)
@@ -581,7 +580,7 @@ class Fisher(Bispectrum):
         self.lmax = lmax
         self.lmin = lmin
 
-        lmax = 500 ########## NOTENOTE
+        lmax = 320 ########## NOTENOTE
 
         # bins used in Meerburg 2016
         bins_0 = np.arange(lmin, 101, 1)
@@ -699,7 +698,7 @@ class Fisher(Bispectrum):
         self.barrier()
 
         # trim away the zeros in first_pass
-        self.unique_ell = np.unique(first_pass)[1:]
+        self.unique_ells = np.unique(first_pass)[1:]
         self.bins = bins
         self.num_pass = num_pass
         self.first_pass = first_pass
@@ -716,20 +715,14 @@ class Fisher(Bispectrum):
         Stores shape = (ells, 3, 3) array. ells is unbinned.
         '''
 
-#        ells = np.arange(lmin, lmax+1)
         ells = self.ells
         indices = np.digitize(ells, self.bins, right=False) - 1
 
         cls = self.depo['cls'] # Signal, lmin = 2
         nls = self.depo['nls'] # Noise
 
-#        lmin = self.depo['nls_lmin']
-#        lmax = self.depo['nls_lmax']
         lmin = ells[0]
         lmax = ells[-1]
-
-#        cls_lmax = self.depo['cls_lmax']
-#        lmax = min(lmax, cls_lmax)
 
         # assume nls start at lmin, cls at ell=2
         nls = nls[:,:(lmax - lmin + 1)]
@@ -738,15 +731,8 @@ class Fisher(Bispectrum):
         # Add signal cov to noise (cls for TB and TE not present in cls)
         nls[:4,:] += cls
 
-
-        # first bin, then take inverse
-#        cov = np.ones((ells.size, 3, 3))
-#        cov *= np.nan
-#        invcov = cov.copy()
-
         bins = self.bins
 
-#        bin_cov = np.ones((bins.size - 1, 3, 3))
         bin_cov = np.ones((bins.size, 3, 3))
         bin_cov *= np.nan
         bin_invcov = bin_cov.copy()
@@ -760,7 +746,6 @@ class Fisher(Bispectrum):
 
                 # Cl+Nl array
                 nidx = nls_dict[pol1+pol2]
-#                nell = nls[nidx,indices]
                 nell = nls[nidx,:]
 
                 # Bin
@@ -785,7 +770,195 @@ class Fisher(Bispectrum):
         self.ells = ells
         self.nls = nls
 
-    def get_Ls(ell1, ell2, ell3, prim_type):
+    def init_wig3j(self):
+        '''
+        Precompute I^000_lL1 and I^20-2_lL2 for all unique ells
+        and \Delta L \in [-1, 1] and [-2, -1, 0, 1, 2]
+
+        Store internally as wig_s and wig_t
+        shape = (ells.size, \Delta L)
+        '''
+
+        u_ells = self.unique_ells
+        ells = self.ells
+
+#        u_ells = np.arange(40, 200)
+#        ells = np.arange(40, 200)
+
+        lmin = ells[0]
+
+        wig_s = np.zeros((ells.size, 2))
+        wig_t = np.zeros((ells.size, 5))
+
+        for ell in u_ells:
+            lidx = ell - lmin
+
+            for Lidx, DL in enumerate([-1, 1]):
+                L = ell + DL
+                tmp = wig.wig3jj([2*ell, 2*L, 2, 
+                                  0, 0, 0])
+                tmp *= np.sqrt((2 * L + 1) * (2 * ell + 1) * 3)
+                tmp /= (2 * np.sqrt(np.pi))
+                wig_s[lidx,Lidx] = tmp
+
+            for Lidx, DL in enumerate([-2, -1, 0, 1, 2]):
+                L = ell + DL
+
+                tmp = wig.wig3jj([2*ell, 2*L, 4, 
+                                  4, 0, -4])
+                tmp *= np.sqrt((2 * L + 1) * (2 * ell + 1) * 5)
+                tmp /= (2 * np.sqrt(np.pi))
+
+                wig_t[lidx,Lidx] = tmp
+
+        self.wig_s = wig_s
+        self.wig_t = wig_t
+
+    def init_pol_triplets(self):
+        '''
+        Store polarization triples internally 
+        
+        I = 0, E = 1, B = 2
+        '''
+                
+        pol_trpl = np.zeros((12, 3), dtype=int)
+
+        pol_trpl[0] = 0, 0, 2
+        pol_trpl[1] = 0, 2, 0
+        pol_trpl[2] = 2, 0, 0
+        pol_trpl[3] = 1, 0, 2
+        pol_trpl[4] = 1, 2, 0
+        pol_trpl[5] = 2, 1, 0
+        pol_trpl[6] = 0, 1, 2
+        pol_trpl[7] = 0, 2, 1
+        pol_trpl[8] = 2, 0, 1
+        pol_trpl[9] = 1, 1, 2
+        pol_trpl[10] = 1, 2, 1
+        pol_trpl[11] = 2, 1, 1
+
+        self.pol_trpl = pol_trpl
+
+
+    def binned_bispectrum(self, DL1, DL2, DL3):
+        '''
+        Compute B for each bin
+
+        Save as 
+        '''
+    
+        # loop over bins
+        bins = self.bins
+        ells = self.ells
+        lmin = ells[0]
+        u_ells = self.unique_ells
+        num_pass = self.num_pass
+        first_pass = self.first_pass
+        
+        wig_t = self.wig_t
+        wig_s = self.wig_s
+
+        pol_trpl = self.pol_trpl
+        psize = pol_trpl[0].size
+        
+        # binned betas
+        beta_s = self.depo['scalar']['b_beta']
+        beta_t = self.depo['tensor']['b_beta']
+
+
+        import time
+        
+        t0 = time.time()
+        # do not consider the last bin
+        for idx1, i1 in enumerate(bins[:-1]):
+
+            # load binned beta
+            beta_s_ell1 = beta_s[idx,DL1,0,] #####
+
+            for idx2, i2 in enumerate(bins[idx1:-1]):
+                idx2 += idx1
+
+                # load beta
+                
+                for idx3, i3 in enumerate(bins[idx2:-1]):
+                    idx3 += idx2
+                    
+                    # load beta
+
+                    # idxs are indices of bins
+                    ell1, ell2, ell3 = first_pass[idx1, idx2, idx3,:]                
+                    
+                    # indices to full-size ell arrays
+                    lidx1 = ell1 - lmin
+                    lidx2 = ell2 - lmin
+                    lidx3 = ell3 - lmin
+
+                    L1 = DL1 + ell1
+                    L2 = DL2 + ell2
+                    L3 = DL3 + ell3
+
+                    num = num_pass[idx1, idx2, idx3]                
+                    
+                    print i1, i2, i3, ell1, ell2, ell3, num
+                    
+                    # (-1)^((L1+L2+L3) / 2)I_L1L2L3^000 factor is shared
+                    ang = -1. if (L1 + L2 + L3) % 2 else 1.
+                    ang *= wig.wig3jj([2*L1, 2*L2, 2*L3, 
+                                      0, 0, 0])
+
+
+                    # calculate the angular parts for each S, S, T comb
+                    # TSS
+                    ang_tss = wig_t[lidx1, DL1]
+                    ang_tss *= wig_s[lidx2, DL2]
+                    ang_tss *= wig_s[lidx3, DL3]
+                    ang_tss *= ang
+                    ang_tss *= wig.wig9jj( [(2*ell1),  (2*ell2),  (2*ell3),
+                                            (2*L1),  (2*L2),  (2*L3), 
+                                            4,  2,  2] )
+
+                    # STS
+                    ang_sts = wig_s[lidx1, DL1]
+                    ang_sts *= wig_t[lidx2, DL2]
+                    ang_sts *= wig_s[lidx3, DL3]
+                    ang_sts *= ang
+                    ang_sts *= wig.wig9jj( [(2*ell1),  (2*ell2),  (2*ell3),
+                                            (2*L1),  (2*L2),  (2*L3), 
+                                            2, 4,  2] )
+                    # TSS
+                    ang_sst = wig_s[lidx1, DL1]
+                    ang_sst *= wig_s[lidx2, DL2]
+                    ang_sst *= wig_t[lidx3, DL3]
+                    ang_sst *= ang
+                    ang_sst *= wig.wig9jj( [(2*ell1),  (2*ell2),  (2*ell3),
+                                            (2*L1),  (2*L2),  (2*L3), 
+                                            2,  2,  4] )
+                                        
+                    # loop over pol combs
+                    for pdix in xrange(psize):
+
+                        pidx1, pidx2, pidx3 = pol_trpl[pidx,:]                        
+                        
+                        # integrate over bba + bab + bba for each T, S, S comb
+
+                        
+                        
+
+#                    for pol in 
+
+#                    val9j = wig.wig9jj( [(2*ell1),  (2*ell2),  (2*ell3),
+#                                         (2*ell1),  (2*ell2),  (2*ell3), 
+#                                         2*2,  2*1,  2*1] )
+#                    print val9j
+
+
+                    # loop over L combs
+                    
+
+        print time.time() - t0
+        print bins.size
+        # load up 
+
+    def get_Ls(self, ell1, ell2, ell3, prim_type):
         '''
         Arguments
         ---------
@@ -800,7 +973,7 @@ class Fisher(Bispectrum):
             Shape (20, 3), nan where triangle cond is not met
             or sum is odd.
         '''
-        Ls = np.empty(20, 3)
+        Ls = np.empty((20, 3))
 
         if prim_type == 'tss':
 
@@ -847,6 +1020,7 @@ class Fisher(Bispectrum):
         # how does the fisher loop know which L's to skip
         # depending on pol? I guess another if statemant there
         return Ls
+
 
     def binned_fisher(self):
         '''
@@ -953,46 +1127,6 @@ class Fisher(Bispectrum):
         return Ls, tri_cond
 
 
-    def init_wig3j(self):
-        '''
-        Precompute I^000_lL1 and I^20-2_lL2
-        '''
-
-        lmax_s = self.depo['scalar']['lmax']
-        lmax_t = self.depo['tensor']['lmax']
-
-        ells = np.arange(2, lmax_s+1)
-        ells *= 2 # for wign
-
-        pre_s = np.ones((lmax_s-1, 2), dtype=float) # DL = {-1, 1}
-        pre_t = np.ones((lmax_t-1, 5), dtype=float) # DL = {-2, -1, 0, 1, 2}
-
-        pre_s *= np.sqrt(3)
-        pre_s /= (2 * np.pi)
-
-        pre_t *= np.sqrt(5)
-        pre_t /= (2 * np.pi)
-
-
-        for lidx, ell in enumerate(ells):
-
-            for Lidx, dL in enumerate([-1, 1]):
-
-                L = ell + 2 * dL # factor 2 for wign
-
-                pre_s[lidx, Lidx] *= np.sqrt((L + 1) * (ell + 1))
-                pre_s[lidx, Lidx] *= wig.wig3jj([ell, L, 2, 2, 0, -2])
-
-            for Lidx, dL in enumerate([-2, -1, 0, 1, 2]):
-                # note that ell = 2l, L = 2L
-
-                L = ell + 2 * dL # factor 2 for wign
-
-                pre_t[lidx, Lidx] *= np.sqrt((L + 1) * (ell + 1))
-                pre_t[lidx, Lidx] *= wig.wig3jj([ell, L, 4, 4, 0, -4])
-
-        self.pre_s = pre_s
-        self.pre_t = pre_t
 
     def inverse_delta(self, l1, l2, l3):
 
@@ -1003,17 +1137,17 @@ class Fisher(Bispectrum):
         else:
             return 0.5
 
-    def get_Ls(self, l1, l2, l3, DL1, DL2, DL3):
-        '''
-        DL : array-like
-            e.g. [-2, -1, 0, 1, 2]
-        '''
+#    def get_Ls(self, l1, l2, l3, DL1, DL2, DL3):
+#        '''
+#        DL : array-like
+#            e.g. [-2, -1, 0, 1, 2]
+#        '''
 
-        L1 = DL1 + l1
-        L2 = DL2 + l2
-        L3 = DL3 + l3
+#        L1 = DL1 + l1
+#        L2 = DL2 + l2
+#        L3 = DL3 + l3
 
-        return np.array(np.meshgrid(L1, L2, L3)).T.reshape(-1,3)
+#        return np.array(np.meshgrid(L1, L2, L3)).T.reshape(-1,3)
 
     def fisher_new(self):
 
