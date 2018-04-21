@@ -22,8 +22,10 @@ local_amp = (2 * np.pi)**3 * scalar_amp * np.sqrt(sttr) * np.sqrt(2) * np.pi # s
 #err_me = np.load(opj(ana_dir, 'radii3.npy')) #ell, L, nfact, err, ks, pol
 beta_me = np.load(opj(ha_beta_dir, 'beta_lowell_scalar.npy')) #ell, L, nfact, err, ks, pol
 err_me = np.load(opj(ha_beta_dir, 'radii_nolens.npy'))
-alpha_me = beta_me[:,0,0,:,1,0] #ell, err
-beta_me = beta_me[:,0,0,:,0,0] #ell, err
+#alpha_me = beta_me[:,0,0,:,1,0] #ell, err
+#beta_me = beta_me[:,0,0,:,0,0] #ell, err
+alpha_me = beta_me[:,0,0,1,0,:] #ell, err
+beta_me = beta_me[:,0,0,0,0,:] #ell, err
 
 beta_me /= local_amp
 #alpha_me /= local_amp
@@ -59,7 +61,7 @@ plt.close()
 
 ell = np.arange(lmax_me+1)
 fig, ax = plt.subplots(2, sharex=True)
-for ell in [490, 495]:
+for ell in [290, 295]:
     ax[0].plot(err_me, beta_me[ell-40, :], label='ell={}'.format(ell))
     ax[1].plot(err, beta[:, ell-2])
 ax[0].legend()
@@ -67,7 +69,7 @@ fig.savefig(opj(ana_dir, 'beta_comp_err.png'))
 plt.close()
 
 fig, ax = plt.subplots(2, sharex=True)
-for ell in [490, 495]:
+for ell in [290, 295]:
     ax[0].plot(err_me, alpha_me[ell-40, :], label='ell={}'.format(ell))
     ax[1].plot(err, alpha[:, ell-2])
 ax[0].legend()

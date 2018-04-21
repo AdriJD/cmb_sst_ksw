@@ -154,6 +154,7 @@ class PreCalc(instr.MPIBase):
 
         radii = np.concatenate((low, re1, re2, rec))
 
+        self.depo['radii'] = radii
         return radii
 
     def get_updated_radii(self):
@@ -170,9 +171,21 @@ class PreCalc(instr.MPIBase):
 
         radii = np.concatenate((low, re1, re2, rec, rec_new, rec_extra))
 
+        self.depo['radii'] = radii
         return radii
 
-    def beta(self, f, L_range=[-2, -1, 0, 1, 2], radii=None, bin=True,
+    def init_beta(self, path, **kwargs):
+        '''
+        Load or compute beta (beta_s and beta_t)
+
+        Arguments
+        ---------
+        path : str
+            Path to beta files
+        '''
+
+
+    def beta(self, f=None, L_range=[-2, -1, 0, 1, 2], radii=None, bin=True,
              optimize=True):
         '''
         Calculate beta_l,L(r) = 2/pi * \int k^2 dk f(k) j_L(kr) T_X,l^(Z)(k).
@@ -180,12 +193,13 @@ class PreCalc(instr.MPIBase):
 
         Arguments
         ---------
-        f : array-like
-            Factor f(k) of (primordial) factorized shape function.
-            Can be of shape (nfact, 3, k.size)
 
         Keyword arguments
         -----------------
+        f : array-like
+            Factor f(k) of (primordial) factorized shape function.
+            Can be of shape (nfact, 3, k.size) If None, use local
+            (default : None)
         radii : array-like
             Array with radii to compute. In units [Mpc], if None,
             use default_radii (default : None)
@@ -206,6 +220,9 @@ class PreCalc(instr.MPIBase):
         ells = self.ells
         L_range = np.asarray(L_range)
 
+        if f is None:
+            f = self.local()
+
         # you want to allow f to be of shape (nfact, 3, k.size)
         ndim = f.ndim
         if ndim == 3:
@@ -224,6 +241,7 @@ class PreCalc(instr.MPIBase):
 
         if radii is None:
             radii = self.get_updated_radii()
+        self.depo['radii'] = radii
 
         k = self.depo['scalar']['k']
         if k.size != f.shape[2]:
@@ -240,7 +258,7 @@ class PreCalc(instr.MPIBase):
 
         # load both scalar and tensor transfer functions
         transfer_s = self.depo['scalar']['transfer']
-        transfer_t = self.depo['tensor']['transfer'] 
+        transfer_t = self.depo['tensor']['transfer']
         pols_s = ['I', 'E']
         pols_t = ['I', 'E', 'B']
 
@@ -253,8 +271,11 @@ class PreCalc(instr.MPIBase):
             radii_per_rank.append(radii[rank::self.mpi_size])
 
         # beta scalar and tensor
-        beta_s = np.zeros((ells.size, L_range.size, nfact, radii_sub.size, ks, len(pols_s)))
-        beta_t = np.zeros((ells.size, L_range.size, nfact, radii_sub.size, ks, len(pols_t)))
+#        beta_s = np.zeros((ells.size, L_range.size, nfact, radii_sub.size, ks, len(pols_s)))
+#        beta_t = np.zeros((ells.size, L_range.size, nfact, radii_sub.size, ks, len(pols_t)))
+
+        beta_s = np.zeros((ells.size, L_range.size, nfact, ks, len(pols_s), radii_sub.size))
+        beta_t = np.zeros((ells.size, L_range.size, nfact, ks, len(pols_t), radii_sub.size))
 
         # allocate space for bessel functions
         jL = np.zeros((L_range.size, k.size))
@@ -306,14 +327,14 @@ class PreCalc(instr.MPIBase):
 
                     # loop over T, E, B
                     for pidx, pol in enumerate(pols_t):
-                        
+
                         if pol != 'B':
                             tmp_s[kmin_idx:] = transfer_s[pidx,ell-2,kmin_idx:]
                             tmp_s[kmin_idx:] *= jL[Lidx,kmin_idx:]
 
                         tmp_t[kmin_idx:] = transfer_t[pidx,ell-2,kmin_idx:]
                         tmp_t[kmin_idx:] *= jL[Lidx,kmin_idx:]
-                        
+
                         for nidx in xrange(nfact):
                             for kidx in xrange(ks):
 
@@ -322,12 +343,14 @@ class PreCalc(instr.MPIBase):
 
                                     integrand_s = tmp_s[kmin_idx:] * f[nidx,kidx,kmin_idx:]
                                     b_int_s = trapz(integrand_s, k[kmin_idx:])
-                                    beta_s[lidx,Lidx,nidx,ridx,kidx,pidx] = b_int_s
+#                                    beta_s[lidx,Lidx,nidx,ridx,kidx,pidx] = b_int_s
+                                    beta_s[lidx,Lidx,nidx,kidx,pidx,ridx] = b_int_s
 
                                 # tensors
                                 integrand_t = tmp_t[kmin_idx:] * f[nidx,kidx,kmin_idx:]
                                 b_int_t = trapz(integrand_t, k[kmin_idx:])
-                                beta_t[lidx,Lidx,nidx,ridx,kidx,pidx] = b_int_t
+#                                beta_t[lidx,Lidx,nidx,ridx,kidx,pidx] = b_int_t
+                                beta_t[lidx,Lidx,nidx,kidx,pidx,ridx] = b_int_t
 
                 # permute rows such that oldest row can be replaced next ell
                 jL = np.roll(jL, -1, axis=0)
@@ -341,17 +364,25 @@ class PreCalc(instr.MPIBase):
 
             # create full size beta on root
             if self.mpi_rank == 0:
+#                beta_s_full = np.zeros((ells.size, L_range.size, nfact,
+#                                        radii.size, ks, len(pols_s)))
+#                beta_t_full = np.zeros((ells.size, L_range.size, nfact,
+#                                        radii.size, ks, len(pols_t)))
+
                 beta_s_full = np.zeros((ells.size, L_range.size, nfact,
-                                        radii.size, ks, len(pols_s)))
+                                        ks, len(pols_s), radii.size))
                 beta_t_full = np.zeros((ells.size, L_range.size, nfact,
-                                        radii.size, ks, len(pols_t)))
+                                        ks, len(pols_t), radii.size))
 
                 # already place root beta sub into beta_full
                 for ridx, radius in enumerate(radii_per_rank[0]):
                     # find radius index in total radii
                     ridx_tot, = np.where(radii == radius)[0]
-                    beta_s_full[:,:,:,ridx_tot,:,:] = beta_s[:,:,:,ridx,:,:]
-                    beta_t_full[:,:,:,ridx_tot,:,:] = beta_t[:,:,:,ridx,:,:]
+#                    beta_s_full[:,:,:,ridx_tot,:,:] = beta_s[:,:,:,ridx,:,:]
+#                    beta_t_full[:,:,:,ridx_tot,:,:] = beta_t[:,:,:,ridx,:,:]
+                    beta_s_full[:,:,:,:,:,ridx_tot] = beta_s[:,:,:,:,:,ridx]
+                    beta_t_full[:,:,:,:,:,ridx_tot] = beta_t[:,:,:,:,:,ridx]
+
             else:
                 beta_s_full = None
                 beta_t_full = None
@@ -362,8 +393,11 @@ class PreCalc(instr.MPIBase):
                 # allocate space for sub beta on root
                 if self.mpi_rank == 0:
                     r_size = radii_per_rank[rank].size
-                    beta_s_sub = np.ones((ells.size, L_range.size, nfact, r_size, ks, len(pols_s)))
-                    beta_t_sub = np.ones((ells.size, L_range.size, nfact, r_size, ks, len(pols_t)))
+#                    beta_s_sub = np.ones((ells.size, L_range.size, nfact, r_size, ks, len(pols_s)))
+#                    beta_t_sub = np.ones((ells.size, L_range.size, nfact, r_size, ks, len(pols_t)))
+                    beta_s_sub = np.ones((ells.size, L_range.size, nfact, ks, len(pols_s), r_size))
+                    beta_t_sub = np.ones((ells.size, L_range.size, nfact, ks, len(pols_t), r_size))
+
                     beta_s_sub *= np.nan
                     beta_t_sub *= np.nan
 
@@ -382,8 +416,11 @@ class PreCalc(instr.MPIBase):
                         # find radius index in total radii
                         ridx_tot, = np.where(radii == radius)[0]
 
-                        beta_s_full[:,:,:,ridx_tot,:,:] = beta_s_sub[:,:,:,ridx,:,:]
-                        beta_t_full[:,:,:,ridx_tot,:,:] = beta_t_sub[:,:,:,ridx,:,:]
+#                        beta_s_full[:,:,:,ridx_tot,:,:] = beta_s_sub[:,:,:,ridx,:,:]
+#                        beta_t_full[:,:,:,ridx_tot,:,:] = beta_t_sub[:,:,:,ridx,:,:]
+                        beta_s_full[:,:,:,:,:,ridx_tot] = beta_s_sub[:,:,:,:,:,ridx]
+                        beta_t_full[:,:,:,:,:,ridx_tot] = beta_t_sub[:,:,:,:,:,ridx]
+
 
             # broadcast full beta array to all ranks
             beta_s = self.broadcast_array(beta_s_full)
@@ -393,7 +430,7 @@ class PreCalc(instr.MPIBase):
             self.depo['scalar']['beta'] = beta_s
             self.depo['tensor']['beta'] = beta_t
             return
-            
+
         # Bin beta
         bins = self.bins
         indices = np.digitize(ells, bins, right=False) - 1
@@ -401,39 +438,56 @@ class PreCalc(instr.MPIBase):
         beta_s_f = np.asfortranarray(beta_s)
         beta_t_f = np.asfortranarray(beta_t)
 
-        b_beta_s_f = np.zeros((bins.size, L_range.size, nfact, radii_sub.size, ks, len(pols_s)))
-        b_beta_t_f = np.zeros((bins.size, L_range.size, nfact, radii_sub.size, ks, len(pols_t)))
+#        b_beta_s_f = np.zeros((bins.size, L_range.size, nfact, radii.size, ks, len(pols_s)))
+#        b_beta_t_f = np.zeros((bins.size, L_range.size, nfact, radii.size, ks, len(pols_t)))
+        b_beta_s_f = np.zeros((bins.size,L_range.size,nfact,ks,len(pols_s),radii.size))
+        b_beta_t_f = np.zeros((bins.size,L_range.size,nfact,ks,len(pols_t),radii.size))
 
         b_beta_s_f = np.asfortranarray(b_beta_s_f)
         b_beta_t_f = np.asfortranarray(b_beta_t_f)
 
-        for pidx, pol in enumerate(pols_s):
+        for pidx, pol in enumerate(pols_t):
             for kidx in xrange(ks):
-                for ridx, radius in enumerate(radii_sub):
+                for ridx, radius in enumerate(radii):
                     for nidx in xrange(nfact):
                         for Lidx, L in enumerate(L_range):
 
                             if pol != 'B':
                                 # scalar
-                                tmp_beta = beta_s_f[:,Lidx,nidx,ridx,kidx,pidx]
+#                                tmp_beta = beta_s_f[:,Lidx,nidx,ridx,kidx,pidx]
+                                tmp_beta = beta_s_f[:,Lidx,nidx,kidx,pidx,ridx]
 
-                                b_beta_s_f[:-1,Lidx,nidx,ridx,kidx,pidx], _, _ = \
+#                                b_beta_s_f[:-1,Lidx,nidx,ridx,kidx,pidx], _, _ = \
+#                                    binned_statistic(ells, tmp_beta, statistic='mean',
+#                                                     bins=bins)
+                                b_beta_s_f[:-1,Lidx,nidx,kidx,pidx,ridx], _, _ = \
                                     binned_statistic(ells, tmp_beta, statistic='mean',
                                                      bins=bins)
 
-                                # expand to full size    
-                                beta_s_f[:,Lidx,nidx,ridx,kidx,pidx] = \
-                                    b_beta_s_f[indices,Lidx,nidx,ridx,kidx,pidx]
+                                # expand to full size
+#                                beta_s_f[:,Lidx,nidx,ridx,kidx,pidx] = \
+#                                    b_beta_s_f[indices,Lidx,nidx,ridx,kidx,pidx]
+                                beta_s_f[:,Lidx,nidx,kidx,pidx,ridx] = \
+                                    b_beta_s_f[indices,Lidx,nidx,kidx,pidx,ridx]
+
 
                             # tensor
-                            tmp_beta = beta_t_f[:,Lidx,nidx,ridx,kidx,pidx]
+#                            tmp_beta = beta_t_f[:,Lidx,nidx,ridx,kidx,pidx]
+                            tmp_beta = beta_t_f[:,Lidx,nidx,kidx,pidx,ridx]
 
-                            b_beta_t_f[:-1,Lidx,nidx,ridx,kidx,pidx], _, _ = \
+#                            b_beta_t_f[:-1,Lidx,nidx,ridx,kidx,pidx], _, _ = \
+#                                binned_statistic(ells, tmp_beta, statistic='mean',
+#                                                 bins=bins)
+                            b_beta_t_f[:-1,Lidx,nidx,kidx,pidx,ridx], _, _ = \
                                 binned_statistic(ells, tmp_beta, statistic='mean',
                                                  bins=bins)
-                            # expand to full size    
-                            beta_t_f[:,Lidx,nidx,ridx,kidx,pidx] = \
-                                b_beta_t_f[indices,Lidx,nidx,ridx,kidx,pidx]
+
+                            # expand to full size
+#                            beta_t_f[:,Lidx,nidx,ridx,kidx,pidx] = \
+#                                b_beta_t_f[indices,Lidx,nidx,ridx,kidx,pidx]
+                            beta_t_f[:,Lidx,nidx,kidx,pidx,ridx] = \
+                                b_beta_t_f[indices,Lidx,nidx,kidx,pidx,ridx]
+
 
         beta_s = np.ascontiguousarray(beta_s_f)
         beta_t = np.ascontiguousarray(beta_t_f)
@@ -447,8 +501,8 @@ class PreCalc(instr.MPIBase):
         # binned versions
         self.depo['scalar']['b_beta'] = b_beta_s
         self.depo['tensor']['b_beta'] = b_beta_t
-        
-        return 
+
+        return
 
 #class Experiment(object):
 #    '''
@@ -506,14 +560,14 @@ class Bispectrum(PreCalc):
 
     def equilateral(self, fnl=1):
         '''
-        
+
         '''
 
         pass
 
     def orthogonal(self, fnl=1):
         '''
-        
+
         '''
         pass
 
@@ -580,7 +634,10 @@ class Fisher(Bispectrum):
         self.lmax = lmax
         self.lmin = lmin
 
-        lmax = 320 ########## NOTENOTE
+        lmax = 44 ########## NOTENOTE
+
+        if lmax < lmin:
+            raise ValueError('lmax < lmin')
 
         # bins used in Meerburg 2016
         bins_0 = np.arange(lmin, 101, 1)
@@ -685,11 +742,36 @@ class Fisher(Bispectrum):
                     sum_root = np.sum(first_pass, axis=3)
                     sum_rec = np.sum(first_pass_rec, axis=3)
 
-                    mask = sum_rec <= sum_root
-                    # exclude tuples where sum_rec is zero
-                    mask *= (sum_rec != 0)
+#                    mask = sum_rec <= sum_root # if root is zero and rec is pos, mask = False
+#                    print mask
+#                    # exclude tuples where sum_rec is zero
+#                    mask *= (sum_rec != 0)
+#                    print mask
 
+                    mask = sum_root == 0
                     first_pass[mask,:] = first_pass_rec[mask,:]
+
+                    mask2 = sum_rec < sum_root
+                    # but rec is not zero
+                    mask2 *= sum_rec != 0
+                    first_pass[mask2,:] = first_pass_rec[mask2,:]
+
+
+
+#                    mask = sum_root != 0
+##                    imask = ~mask.copy()
+#                    # find indices where rec is smaller than nonzero root
+#                    mask *= sum_rec <= sum_root 
+#                    first_pass[mask,:] = first_pass_rec[mask,:]
+#                    print mask
+                    # replace root with rec, where  root is zero                    
+#                    imask = sum_root
+#                    first_pass[imask,:] = first_pass_rec[imask,:]
+
+                    # exclude tuples where sum_rec is zero
+
+
+#                    first_pass[mask,:] = first_pass_rec[mask,:] #mask should be true where rec should be taken
 
             # broadcast full arrays to all ranks
             num_pass = self.broadcast_array(num_pass)
@@ -787,24 +869,28 @@ class Fisher(Bispectrum):
 
         lmin = ells[0]
 
-        wig_s = np.zeros((ells.size, 2))
+        wig_s = np.zeros((ells.size, 5))
         wig_t = np.zeros((ells.size, 5))
 
         for ell in u_ells:
             lidx = ell - lmin
 
-            for Lidx, DL in enumerate([-1, 1]):
-                L = ell + DL
-                tmp = wig.wig3jj([2*ell, 2*L, 2, 
-                                  0, 0, 0])
-                tmp *= np.sqrt((2 * L + 1) * (2 * ell + 1) * 3)
-                tmp /= (2 * np.sqrt(np.pi))
-                wig_s[lidx,Lidx] = tmp
-
+#            for Lidx, DL in enumerate([-1, 1]):
             for Lidx, DL in enumerate([-2, -1, 0, 1, 2]):
-                L = ell + DL
 
-                tmp = wig.wig3jj([2*ell, 2*L, 4, 
+                L = ell + DL
+                if DL == -1 or DL == 1:
+
+                    tmp = wig.wig3jj([2*ell, 2*L, 2,
+                                      0, 0, 0])
+                    tmp *= np.sqrt((2 * L + 1) * (2 * ell + 1) * 3)
+                    tmp /= (2 * np.sqrt(np.pi))
+                    wig_s[lidx,Lidx] = tmp
+
+#            for Lidx, DL in enumerate([-2, -1, 0, 1, 2]):
+#                L = ell + DL
+
+                tmp = wig.wig3jj([2*ell, 2*L, 4,
                                   4, 0, -4])
                 tmp *= np.sqrt((2 * L + 1) * (2 * ell + 1) * 5)
                 tmp /= (2 * np.sqrt(np.pi))
@@ -816,11 +902,11 @@ class Fisher(Bispectrum):
 
     def init_pol_triplets(self):
         '''
-        Store polarization triples internally 
-        
+        Store polarization triples internally
+
         I = 0, E = 1, B = 2
         '''
-                
+
         pol_trpl = np.zeros((12, 3), dtype=int)
 
         pol_trpl[0] = 0, 0, 2
@@ -843,9 +929,11 @@ class Fisher(Bispectrum):
         '''
         Compute B for each bin
 
-        Save as 
+        Save as
+
+        DL1 : Delta L
         '''
-    
+
         # loop over bins
         bins = self.bins
         ells = self.ells
@@ -853,110 +941,213 @@ class Fisher(Bispectrum):
         u_ells = self.unique_ells
         num_pass = self.num_pass
         first_pass = self.first_pass
-        
+
         wig_t = self.wig_t
         wig_s = self.wig_s
 
         pol_trpl = self.pol_trpl
-        psize = pol_trpl[0].size
-        
+        psize = pol_trpl.shape[0]
+
         # binned betas
         beta_s = self.depo['scalar']['b_beta']
         beta_t = self.depo['tensor']['b_beta']
 
+        beta_s = self.depo['scalar']['beta']
+        beta_t = self.depo['tensor']['beta']
+
+        # get radii corresponing to beta
+        radii = self.depo['radii']
+        r2 = radii**2
+        integrand = np.zeros_like(radii)
+
+        nbins = bins.size
+        bispectrum = np.zeros((nbins, nbins, nbins, psize))
 
         import time
-        
+
+#        print radii
+#        print r2
+#        print beta_s
+#        print beta_t
+#        exit()
+
+        Lidx1 = DL1 + 2
+        Lidx2 = DL2 + 2
+        Lidx3 = DL3 + 2
+
         t0 = time.time()
         # do not consider the last bin
         for idx1, i1 in enumerate(bins[:-1]):
 
             # load binned beta
-            beta_s_ell1 = beta_s[idx,DL1,0,] #####
+            beta_s_l1 = beta_s[idx1,Lidx1,0,0,:,:] # (2,r.size)
+            beta_t_l1 = beta_t[idx1,Lidx1,0,0,:,:] # (3,r.size)
+
+            alpha_s_l1 = beta_s[idx1,Lidx1,0,1,:,:] # (2,r.size)
+            alpha_t_l1 = beta_t[idx1,Lidx1,0,1,:,:] # (3,r.size)
+
 
             for idx2, i2 in enumerate(bins[idx1:-1]):
                 idx2 += idx1
 
                 # load beta
-                
+                beta_s_l2 = beta_s[idx2,Lidx2,0,0,:,:] # (2,r.size)
+                beta_t_l2 = beta_t[idx2,Lidx2,0,0,:,:] # (3,r.size)
+
+                alpha_s_l2 = beta_s[idx2,Lidx2,0,1,:,:] # (2,r.size)
+                alpha_t_l2 = beta_t[idx2,Lidx2,0,1,:,:] # (3,r.size)
+
                 for idx3, i3 in enumerate(bins[idx2:-1]):
                     idx3 += idx2
-                    
-                    # load beta
 
-                    # idxs are indices of bins
-                    ell1, ell2, ell3 = first_pass[idx1, idx2, idx3,:]                
+                    num = num_pass[idx1, idx2, idx3]
+                    if num == 0:
+                        continue
+
+#                    print idx1,idx2,idx3, num_pass[idx1,idx2,idx3], first_pass[idx1,idx2,idx3,:]
                     
+
+                    # load beta
+                    beta_s_l3 = beta_s[idx3,Lidx3,0,0,:,:] # (2,r.size)
+                    beta_t_l3 = beta_t[idx3,Lidx3,0,0,:,:] # (3,r.size)
+
+                    alpha_s_l3 = beta_s[idx3,Lidx3,0,1,:,:] # (2,r.size)
+                    alpha_t_l3 = beta_t[idx3,Lidx3,0,1,:,:] # (3,r.size)
+
+                    ell1, ell2, ell3 = first_pass[idx1, idx2, idx3,:]
+
                     # indices to full-size ell arrays
                     lidx1 = ell1 - lmin
                     lidx2 = ell2 - lmin
                     lidx3 = ell3 - lmin
 
+#                    print 'aa', ell1, ell2, ell3
+#                    print 'bb', lidx1, lidx2, lidx3
+#                    print 'cc', idx1, idx2, idx3
+#                    print 'dd', num
+
                     L1 = DL1 + ell1
                     L2 = DL2 + ell2
                     L3 = DL3 + ell3
 
-                    num = num_pass[idx1, idx2, idx3]                
-                    
-                    print i1, i2, i3, ell1, ell2, ell3, num
-                    
+#                    print i1, i2, i3, ell1, ell2, ell3, num
+#                    print (-1j)**(ell1 + ell2 + ell3), (1j)**(L1 + L2 + L3)
+#                    continue
+
                     # (-1)^((L1+L2+L3) / 2)I_L1L2L3^000 factor is shared
-                    ang = -1. if (L1 + L2 + L3) % 2 else 1.
-                    ang *= wig.wig3jj([2*L1, 2*L2, 2*L3, 
+#                    ang = -1. if (L1 + L2 + L3) % 2 else 1.
+                    ang = 1
+                    ang *= wig.wig3jj([2*L1, 2*L2, 2*L3,
                                       0, 0, 0])
 
 
                     # calculate the angular parts for each S, S, T comb
                     # TSS
-                    ang_tss = wig_t[lidx1, DL1]
-                    ang_tss *= wig_s[lidx2, DL2]
-                    ang_tss *= wig_s[lidx3, DL3]
+                    ang_tss = wig_t[lidx1, Lidx1]
+                    print 'a', ang_tss
+                    ang_tss *= wig_s[lidx2, Lidx2]
+                    print 'b', ang_tss
+                    ang_tss *= wig_s[lidx3, Lidx2]
+                    print 'c', ang_tss
                     ang_tss *= ang
-                    ang_tss *= wig.wig9jj( [(2*ell1),  (2*ell2),  (2*ell3),
-                                            (2*L1),  (2*L2),  (2*L3), 
-                                            4,  2,  2] )
+                    if ang_tss != 0.:
+                        print 'tss'
+                        ang_tss *= wig.wig9jj( [(2*ell1),  (2*ell2),  (2*ell3),
+                                                (2*L1),  (2*L2),  (2*L3),
+                                                4,  2,  2] )
+                    else:
+                        pass
 
                     # STS
-                    ang_sts = wig_s[lidx1, DL1]
-                    ang_sts *= wig_t[lidx2, DL2]
-                    ang_sts *= wig_s[lidx3, DL3]
+                    ang_sts = wig_s[lidx1, Lidx2]
+                    ang_sts *= wig_t[lidx2, Lidx2]
+                    ang_sts *= wig_s[lidx3, Lidx2]
                     ang_sts *= ang
-                    ang_sts *= wig.wig9jj( [(2*ell1),  (2*ell2),  (2*ell3),
-                                            (2*L1),  (2*L2),  (2*L3), 
-                                            2, 4,  2] )
+                    if ang_sts != 0.:
+                        print 'sts'
+                        ang_sts *= wig.wig9jj( [(2*ell1),  (2*ell2),  (2*ell3),
+                                                (2*L1),  (2*L2),  (2*L3),
+                                                2, 4,  2] )
+                    else:
+                        pass
                     # TSS
-                    ang_sst = wig_s[lidx1, DL1]
-                    ang_sst *= wig_s[lidx2, DL2]
-                    ang_sst *= wig_t[lidx3, DL3]
+                    ang_sst = wig_s[lidx1, Lidx3]
+                    ang_sst *= wig_s[lidx2, Lidx3]
+                    ang_sst *= wig_t[lidx3, Lidx3]
                     ang_sst *= ang
-                    ang_sst *= wig.wig9jj( [(2*ell1),  (2*ell2),  (2*ell3),
-                                            (2*L1),  (2*L2),  (2*L3), 
-                                            2,  2,  4] )
-                                        
+                    if ang_sst != 0.:
+                        print 'sst'
+                        ang_sst *= wig.wig9jj( [(2*ell1),  (2*ell2),  (2*ell3),
+                                                (2*L1),  (2*L2),  (2*L3),
+                                                2,  2,  4] )
+                    else:
+                        pass
+
                     # loop over pol combs
-                    for pdix in xrange(psize):
+                    for pidx in xrange(psize):
 
-                        pidx1, pidx2, pidx3 = pol_trpl[pidx,:]                        
-                        
-                        # integrate over bba + bab + bba for each T, S, S comb
+                        pidx1, pidx2, pidx3 = pol_trpl[pidx,:]
 
-                        
-                        
+                        # integrate over bba + bab + abb for each T, S, S comb
+                        integrand[:] *= 0.
+                        # TSS
+                        if pidx2 == 2 or pidx3 == 2:
+                            # no B-mode for scalar
+                            pass
+                        else:
+                            integrand += beta_t_l1[pidx1,:] * beta_s_l2[pidx2,:] * alpha_s_l3[pidx3,:]
+                            integrand += beta_t_l1[pidx1,:] * alpha_s_l2[pidx2,:] * beta_s_l3[pidx3,:]
+                            integrand += alpha_t_l1[pidx1,:] * beta_s_l2[pidx2,:] * beta_s_l3[pidx3,:]
 
-#                    for pol in 
+
+
+                        # STS
+                        if pidx1 == 2 or pidx3 == 2:
+                            # no B-mode for scalar
+                            pass
+                        else:
+                            integrand += beta_s_l1[pidx1,:] * beta_t_l2[pidx2,:] * alpha_s_l3[pidx3,:]
+                            integrand += beta_s_l1[pidx1,:] * alpha_t_l2[pidx2,:] * beta_s_l3[pidx3,:]
+                            integrand += alpha_s_l1[pidx1,:] * beta_t_l2[pidx2,:] * beta_s_l3[pidx3,:]
+
+                        # SST
+                        if pidx1 == 2 or pidx2 == 2:
+                            # no B-mode for scalar
+                            pass
+                        else:
+                            integrand += beta_s_l1[pidx1,:] * beta_s_l2[pidx2,:] * alpha_t_l3[pidx3,:]
+                            integrand += beta_s_l1[pidx1,:] * alpha_s_l2[pidx2,:] * beta_t_l3[pidx3,:]
+                            integrand += alpha_s_l1[pidx1,:] * beta_s_l2[pidx2,:] * beta_t_l3[pidx3,:]
+
+                        integrand *= r2
+
+                        rad_int = trapz(integrand, radii)
+
+                    print ang_sst
+                    print ang_sts
+                    print ang_tss
+
+
+                        # factor (-i)^sum(ell) in eq. 6.19 shiraishi. Cancels with earlier factor
+#                        rad_int *=
+
+#                        bispectrum[idx1,idx2,idx3,pidx] =
+
+
+#                    for pol in
 
 #                    val9j = wig.wig9jj( [(2*ell1),  (2*ell2),  (2*ell3),
-#                                         (2*ell1),  (2*ell2),  (2*ell3), 
+#                                         (2*ell1),  (2*ell2),  (2*ell3),
 #                                         2*2,  2*1,  2*1] )
 #                    print val9j
 
 
                     # loop over L combs
-                    
+
 
         print time.time() - t0
-        print bins.size
-        # load up 
+
+        # load up
 
     def get_Ls(self, ell1, ell2, ell3, prim_type):
         '''

@@ -34,8 +34,9 @@ print radii.size
 
 F.init_bins()
 
-print F.unique_ell
-exit()
+#print F.unique_ell
+
+
 #print F.num_pass[80:81, 80:90, 80:90]
 print F.num_pass[100:101, 100:101, 100:110]
 #print F.num_pass.shape
