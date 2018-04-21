@@ -13,6 +13,7 @@ from scipy.stats import binned_statistic
 import camb_tools as ct
 import pywigxjpf as wig
 from beamconv import instrument as instr
+import warnings
 
 opj = os.path.join
 
@@ -343,13 +344,11 @@ class PreCalc(instr.MPIBase):
 
                                     integrand_s = tmp_s[kmin_idx:] * f[nidx,kidx,kmin_idx:]
                                     b_int_s = trapz(integrand_s, k[kmin_idx:])
-#                                    beta_s[lidx,Lidx,nidx,ridx,kidx,pidx] = b_int_s
                                     beta_s[lidx,Lidx,nidx,kidx,pidx,ridx] = b_int_s
 
                                 # tensors
                                 integrand_t = tmp_t[kmin_idx:] * f[nidx,kidx,kmin_idx:]
                                 b_int_t = trapz(integrand_t, k[kmin_idx:])
-#                                beta_t[lidx,Lidx,nidx,ridx,kidx,pidx] = b_int_t
                                 beta_t[lidx,Lidx,nidx,kidx,pidx,ridx] = b_int_t
 
                 # permute rows such that oldest row can be replaced next ell
@@ -364,10 +363,6 @@ class PreCalc(instr.MPIBase):
 
             # create full size beta on root
             if self.mpi_rank == 0:
-#                beta_s_full = np.zeros((ells.size, L_range.size, nfact,
-#                                        radii.size, ks, len(pols_s)))
-#                beta_t_full = np.zeros((ells.size, L_range.size, nfact,
-#                                        radii.size, ks, len(pols_t)))
 
                 beta_s_full = np.zeros((ells.size, L_range.size, nfact,
                                         ks, len(pols_s), radii.size))
@@ -378,8 +373,6 @@ class PreCalc(instr.MPIBase):
                 for ridx, radius in enumerate(radii_per_rank[0]):
                     # find radius index in total radii
                     ridx_tot, = np.where(radii == radius)[0]
-#                    beta_s_full[:,:,:,ridx_tot,:,:] = beta_s[:,:,:,ridx,:,:]
-#                    beta_t_full[:,:,:,ridx_tot,:,:] = beta_t[:,:,:,ridx,:,:]
                     beta_s_full[:,:,:,:,:,ridx_tot] = beta_s[:,:,:,:,:,ridx]
                     beta_t_full[:,:,:,:,:,ridx_tot] = beta_t[:,:,:,:,:,ridx]
 
@@ -393,8 +386,7 @@ class PreCalc(instr.MPIBase):
                 # allocate space for sub beta on root
                 if self.mpi_rank == 0:
                     r_size = radii_per_rank[rank].size
-#                    beta_s_sub = np.ones((ells.size, L_range.size, nfact, r_size, ks, len(pols_s)))
-#                    beta_t_sub = np.ones((ells.size, L_range.size, nfact, r_size, ks, len(pols_t)))
+
                     beta_s_sub = np.ones((ells.size, L_range.size, nfact, ks, len(pols_s), r_size))
                     beta_t_sub = np.ones((ells.size, L_range.size, nfact, ks, len(pols_t), r_size))
 
@@ -416,8 +408,6 @@ class PreCalc(instr.MPIBase):
                         # find radius index in total radii
                         ridx_tot, = np.where(radii == radius)[0]
 
-#                        beta_s_full[:,:,:,ridx_tot,:,:] = beta_s_sub[:,:,:,ridx,:,:]
-#                        beta_t_full[:,:,:,ridx_tot,:,:] = beta_t_sub[:,:,:,ridx,:,:]
                         beta_s_full[:,:,:,:,:,ridx_tot] = beta_s_sub[:,:,:,:,:,ridx]
                         beta_t_full[:,:,:,:,:,ridx_tot] = beta_t_sub[:,:,:,:,:,ridx]
 
@@ -438,8 +428,6 @@ class PreCalc(instr.MPIBase):
         beta_s_f = np.asfortranarray(beta_s)
         beta_t_f = np.asfortranarray(beta_t)
 
-#        b_beta_s_f = np.zeros((bins.size, L_range.size, nfact, radii.size, ks, len(pols_s)))
-#        b_beta_t_f = np.zeros((bins.size, L_range.size, nfact, radii.size, ks, len(pols_t)))
         b_beta_s_f = np.zeros((bins.size,L_range.size,nfact,ks,len(pols_s),radii.size))
         b_beta_t_f = np.zeros((bins.size,L_range.size,nfact,ks,len(pols_t),radii.size))
 
@@ -454,37 +442,25 @@ class PreCalc(instr.MPIBase):
 
                             if pol != 'B':
                                 # scalar
-#                                tmp_beta = beta_s_f[:,Lidx,nidx,ridx,kidx,pidx]
                                 tmp_beta = beta_s_f[:,Lidx,nidx,kidx,pidx,ridx]
 
-#                                b_beta_s_f[:-1,Lidx,nidx,ridx,kidx,pidx], _, _ = \
-#                                    binned_statistic(ells, tmp_beta, statistic='mean',
-#                                                     bins=bins)
                                 b_beta_s_f[:-1,Lidx,nidx,kidx,pidx,ridx], _, _ = \
                                     binned_statistic(ells, tmp_beta, statistic='mean',
                                                      bins=bins)
 
                                 # expand to full size
-#                                beta_s_f[:,Lidx,nidx,ridx,kidx,pidx] = \
-#                                    b_beta_s_f[indices,Lidx,nidx,ridx,kidx,pidx]
                                 beta_s_f[:,Lidx,nidx,kidx,pidx,ridx] = \
                                     b_beta_s_f[indices,Lidx,nidx,kidx,pidx,ridx]
 
 
                             # tensor
-#                            tmp_beta = beta_t_f[:,Lidx,nidx,ridx,kidx,pidx]
                             tmp_beta = beta_t_f[:,Lidx,nidx,kidx,pidx,ridx]
 
-#                            b_beta_t_f[:-1,Lidx,nidx,ridx,kidx,pidx], _, _ = \
-#                                binned_statistic(ells, tmp_beta, statistic='mean',
-#                                                 bins=bins)
                             b_beta_t_f[:-1,Lidx,nidx,kidx,pidx,ridx], _, _ = \
                                 binned_statistic(ells, tmp_beta, statistic='mean',
                                                  bins=bins)
 
                             # expand to full size
-#                            beta_t_f[:,Lidx,nidx,ridx,kidx,pidx] = \
-#                                b_beta_t_f[indices,Lidx,nidx,ridx,kidx,pidx]
                             beta_t_f[:,Lidx,nidx,kidx,pidx,ridx] = \
                                 b_beta_t_f[indices,Lidx,nidx,kidx,pidx,ridx]
 
@@ -628,13 +604,16 @@ class Fisher(Bispectrum):
         lmax_nl = self.depo['nls_lmax']
         lmin_nl = self.depo['nls_lmin']
 
+        # store parity
+        self.depo['parity'] = parity
+
         lmax = min(lmax_s, lmax_t, lmax_cl, lmax_nl)
         lmin = lmin_nl
 
         self.lmax = lmax
         self.lmin = lmin
 
-        lmax = 44 ########## NOTENOTE
+        lmax = 200 ########## NOTENOTE
 
         if lmax < lmin:
             raise ValueError('lmax < lmin')
@@ -742,12 +721,6 @@ class Fisher(Bispectrum):
                     sum_root = np.sum(first_pass, axis=3)
                     sum_rec = np.sum(first_pass_rec, axis=3)
 
-#                    mask = sum_rec <= sum_root # if root is zero and rec is pos, mask = False
-#                    print mask
-#                    # exclude tuples where sum_rec is zero
-#                    mask *= (sum_rec != 0)
-#                    print mask
-
                     mask = sum_root == 0
                     first_pass[mask,:] = first_pass_rec[mask,:]
 
@@ -755,23 +728,6 @@ class Fisher(Bispectrum):
                     # but rec is not zero
                     mask2 *= sum_rec != 0
                     first_pass[mask2,:] = first_pass_rec[mask2,:]
-
-
-
-#                    mask = sum_root != 0
-##                    imask = ~mask.copy()
-#                    # find indices where rec is smaller than nonzero root
-#                    mask *= sum_rec <= sum_root 
-#                    first_pass[mask,:] = first_pass_rec[mask,:]
-#                    print mask
-                    # replace root with rec, where  root is zero                    
-#                    imask = sum_root
-#                    first_pass[imask,:] = first_pass_rec[imask,:]
-
-                    # exclude tuples where sum_rec is zero
-
-
-#                    first_pass[mask,:] = first_pass_rec[mask,:] #mask should be true where rec should be taken
 
             # broadcast full arrays to all ranks
             num_pass = self.broadcast_array(num_pass)
@@ -929,7 +885,7 @@ class Fisher(Bispectrum):
         '''
         Compute B for each bin
 
-        Save as
+        Save as (bins, pol1, pol2, pol3, B)
 
         DL1 : Delta L
         '''
@@ -958,22 +914,39 @@ class Fisher(Bispectrum):
         # get radii corresponing to beta
         radii = self.depo['radii']
         r2 = radii**2
-        integrand = np.zeros_like(radii)
 
+        # allocate r arrays
+        integrand = np.zeros_like(radii)
+        integrand_tss = integrand.copy()
+        integrand_sts = integrand.copy()
+        integrand_sst = integrand.copy()
+
+        # allocate bispectrum
         nbins = bins.size
         bispectrum = np.zeros((nbins, nbins, nbins, psize))
 
-        import time
+        # check parity
+        parity = self.depo['parity'] 
+        if parity == 'odd' and (DL1 + DL2 + DL3) % 2 == 0:
+            warnings.warn('parity is odd and DL1 + DL2 + DL3 is even, '
+                          'bispectrum is zero')
+            return
 
-#        print radii
-#        print r2
-#        print beta_s
-#        print beta_t
-#        exit()
+        elif parity == 'even' and (DL1 + DL2 + DL3) % 2 == 1:
+            warnings.warn('parity is even and DL1 + DL2 + DL3 is odd, '
+                          'bispectrum is zero')
+            return
+
+        import time
 
         Lidx1 = DL1 + 2
         Lidx2 = DL2 + 2
         Lidx3 = DL3 + 2
+
+        # define function names locally for faster lookup
+        wig3jj = wig.wig3jj
+        wig9jj = wig.wig9jj
+        trapz_loc = trapz
 
         t0 = time.time()
         # do not consider the last bin
@@ -1000,8 +973,11 @@ class Fisher(Bispectrum):
                 for idx3, i3 in enumerate(bins[idx2:-1]):
                     idx3 += idx2
 
+#                    tc = time.time()
+
                     num = num_pass[idx1, idx2, idx3]
                     if num == 0:
+                        # not a valid tuple
                         continue
 
 #                    print idx1,idx2,idx3, num_pass[idx1,idx2,idx3], first_pass[idx1,idx2,idx3,:]
@@ -1030,33 +1006,43 @@ class Fisher(Bispectrum):
                     L2 = DL2 + ell2
                     L3 = DL3 + ell3
 
+#                    if (L1 + L2 + L3) % 2:
+#                        print 'odd'
+#                        continue
+
 #                    print i1, i2, i3, ell1, ell2, ell3, num
 #                    print (-1j)**(ell1 + ell2 + ell3), (1j)**(L1 + L2 + L3)
 #                    continue
 
                     # (-1)^((L1+L2+L3) / 2)I_L1L2L3^000 factor is shared
 #                    ang = -1. if (L1 + L2 + L3) % 2 else 1.
-                    ang = 1
-                    ang *= wig.wig3jj([2*L1, 2*L2, 2*L3,
-                                      0, 0, 0])
+#                    ang = wig.wig3jj([2*L1, 2*L2, 2*L3,
+#                                      0, 0, 0])
+                    ang = wig3jj([2*L1, 2*L2, 2*L3,
+                                  0, 0, 0])
 
+                    
 
                     # calculate the angular parts for each S, S, T comb
                     # TSS
+#                    print ell1, ell2, ell3, L1, L2, L3
                     ang_tss = wig_t[lidx1, Lidx1]
-                    print 'a', ang_tss
+#                    print 'a', ang_tss
                     ang_tss *= wig_s[lidx2, Lidx2]
-                    print 'b', ang_tss
+#                    print 'b', ang_tss
                     ang_tss *= wig_s[lidx3, Lidx2]
-                    print 'c', ang_tss
+#                    print 'c', ang_tss
                     ang_tss *= ang
                     if ang_tss != 0.:
-                        print 'tss'
-                        ang_tss *= wig.wig9jj( [(2*ell1),  (2*ell2),  (2*ell3),
+#                        print 'tss'
+                        ang_tss *= wig9jj( [(2*ell1),  (2*ell2),  (2*ell3),
                                                 (2*L1),  (2*L2),  (2*L3),
                                                 4,  2,  2] )
+#                        print ang_tss
                     else:
                         pass
+
+#                    ta = time.time()
 
                     # STS
                     ang_sts = wig_s[lidx1, Lidx2]
@@ -1064,10 +1050,11 @@ class Fisher(Bispectrum):
                     ang_sts *= wig_s[lidx3, Lidx2]
                     ang_sts *= ang
                     if ang_sts != 0.:
-                        print 'sts'
-                        ang_sts *= wig.wig9jj( [(2*ell1),  (2*ell2),  (2*ell3),
+#                        print 'sts'
+                        ang_sts *= wig9jj( [(2*ell1),  (2*ell2),  (2*ell3),
                                                 (2*L1),  (2*L2),  (2*L3),
                                                 2, 4,  2] )
+#                        print ang_sts
                     else:
                         pass
                     # TSS
@@ -1076,12 +1063,22 @@ class Fisher(Bispectrum):
                     ang_sst *= wig_t[lidx3, Lidx3]
                     ang_sst *= ang
                     if ang_sst != 0.:
-                        print 'sst'
-                        ang_sst *= wig.wig9jj( [(2*ell1),  (2*ell2),  (2*ell3),
+#                        print 'sst'
+                        ang_sst *= wig9jj( [(2*ell1),  (2*ell2),  (2*ell3),
                                                 (2*L1),  (2*L2),  (2*L3),
                                                 2,  2,  4] )
+ #                       print ang_sst
                     else:
                         pass
+
+                    if ang_tss == 0. and ang_sts == 0. and ang_sst == 0.:
+                        # wrong L,ell comb
+                        print ell1, ell2, ell3, L1, L2, L3
+                        print ang_tss, ang_sts, ang_sst
+                        continue
+
+#                    print 'ta', ta - time.time()
+#                    tb = time.time()
 
                     # loop over pol combs
                     for pidx in xrange(psize):
@@ -1089,60 +1086,63 @@ class Fisher(Bispectrum):
                         pidx1, pidx2, pidx3 = pol_trpl[pidx,:]
 
                         # integrate over bba + bab + abb for each T, S, S comb
-                        integrand[:] *= 0.
+                        integrand[:] = 0.
+
                         # TSS
-                        if pidx2 == 2 or pidx3 == 2:
-                            # no B-mode for scalar
+                        if pidx2 == 2 or pidx3 == 2 or ang_tss == 0.:
+                            # no B-mode for scalar or this l, L combination
                             pass
                         else:
-                            integrand += beta_t_l1[pidx1,:] * beta_s_l2[pidx2,:] * alpha_s_l3[pidx3,:]
-                            integrand += beta_t_l1[pidx1,:] * alpha_s_l2[pidx2,:] * beta_s_l3[pidx3,:]
-                            integrand += alpha_t_l1[pidx1,:] * beta_s_l2[pidx2,:] * beta_s_l3[pidx3,:]
-
-
+                            integrand_tss[:] = beta_t_l1[pidx1,:] * beta_s_l2[pidx2,:] * alpha_s_l3[pidx3,:]
+                            integrand_tss += beta_t_l1[pidx1,:] * alpha_s_l2[pidx2,:] * beta_s_l3[pidx3,:]
+                            integrand_tss += alpha_t_l1[pidx1,:] * beta_s_l2[pidx2,:] * beta_s_l3[pidx3,:]
+                            integrand_tss *= ang_tss
+                            
+                            integrand += integrand_tss
 
                         # STS
-                        if pidx1 == 2 or pidx3 == 2:
+                        if pidx1 == 2 or pidx3 == 2 or ang_sts == 0.:
                             # no B-mode for scalar
                             pass
                         else:
-                            integrand += beta_s_l1[pidx1,:] * beta_t_l2[pidx2,:] * alpha_s_l3[pidx3,:]
-                            integrand += beta_s_l1[pidx1,:] * alpha_t_l2[pidx2,:] * beta_s_l3[pidx3,:]
-                            integrand += alpha_s_l1[pidx1,:] * beta_t_l2[pidx2,:] * beta_s_l3[pidx3,:]
+                            integrand_sts[:] = beta_s_l1[pidx1,:] * beta_t_l2[pidx2,:] * alpha_s_l3[pidx3,:]
+                            integrand_sts += beta_s_l1[pidx1,:] * alpha_t_l2[pidx2,:] * beta_s_l3[pidx3,:]
+                            integrand_sts += alpha_s_l1[pidx1,:] * beta_t_l2[pidx2,:] * beta_s_l3[pidx3,:]
+                            integrand_sts *= ang_sts
+
+                            integrand += integrand_sts
 
                         # SST
-                        if pidx1 == 2 or pidx2 == 2:
+                        if pidx1 == 2 or pidx2 == 2 or ang_sst == 0.:
                             # no B-mode for scalar
                             pass
                         else:
-                            integrand += beta_s_l1[pidx1,:] * beta_s_l2[pidx2,:] * alpha_t_l3[pidx3,:]
-                            integrand += beta_s_l1[pidx1,:] * alpha_s_l2[pidx2,:] * beta_t_l3[pidx3,:]
-                            integrand += alpha_s_l1[pidx1,:] * beta_s_l2[pidx2,:] * beta_t_l3[pidx3,:]
+                            integrand_sst[:] = beta_s_l1[pidx1,:] * beta_s_l2[pidx2,:] * alpha_t_l3[pidx3,:]
+                            integrand_sst += beta_s_l1[pidx1,:] * alpha_s_l2[pidx2,:] * beta_t_l3[pidx3,:]
+                            integrand_sst += alpha_s_l1[pidx1,:] * beta_s_l2[pidx2,:] * beta_t_l3[pidx3,:]
+                            integrand_sst *= ang_sst
 
+                            integrand += integrand_sst
+                        
+                        # Integrate over r
                         integrand *= r2
+                        bispec = trapz_loc(integrand, radii)
 
-                        rad_int = trapz(integrand, radii)
+                        bispectrum[idx1,idx2,idx3,pidx] = bispec
+                        
+        bispectrum *= (8 * np.pi)**(3/2.) / 3.
+        return bispectrum
 
-                    print ang_sst
-                    print ang_sts
-                    print ang_tss
 
+#                    print 'b', tb - time.time()
+#                    print 'c', tc - time.time()
+#                        print '0', rad_int, '1', ang_tss, '2', ang_sts, '3', ang_sst
 
                         # factor (-i)^sum(ell) in eq. 6.19 shiraishi. Cancels with earlier factor
 #                        rad_int *=
 
 #                        bispectrum[idx1,idx2,idx3,pidx] =
 
-
-#                    for pol in
-
-#                    val9j = wig.wig9jj( [(2*ell1),  (2*ell2),  (2*ell3),
-#                                         (2*ell1),  (2*ell2),  (2*ell3),
-#                                         2*2,  2*1,  2*1] )
-#                    print val9j
-
-
-                    # loop over L combs
 
 
         print time.time() - t0
