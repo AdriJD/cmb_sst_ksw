@@ -50,4 +50,8 @@ if F.mpi_rank == 0:
     plt.savefig(opj(ana_dir, 'bispectrum/test', 'test.png'))
     plt.close()
                 
-
+    
+    np.save(opj(ana_dir, 'bispectrum/test', 'test.npy'), B)
+    np.save(opj(ana_dir, 'bispectrum/test', 'bins.npy'), F.bins)
+    np.save(opj(ana_dir, 'bispectrum/test', 'num_pass.npy'), F.num_pass)
+    np.save(opj(ana_dir, 'bispectrum/test', 'first_pass.npy'), F.first_pass)

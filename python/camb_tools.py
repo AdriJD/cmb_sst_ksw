@@ -124,7 +124,7 @@ def get_spectra(source_dir, tag='', lensed=True):
     
     return cls, lmax
 
-def get_so_noise(tt_file=None, pol_file=None):
+def get_so_noise(tt_file=None, pol_file=None, sat_file=None):
     '''
     Read in the SO noise curves
 
@@ -147,6 +147,14 @@ def get_so_noise(tt_file=None, pol_file=None):
         noise array for EE, same shape as ell_pol
     nl_BB : array-like
         noise array for BB, same shape as ell_pol
+        
+    optional:
+    ell_sat : array_like
+        ell array for sat
+    nl_sat : array-like
+        Noise array for small-aperature telescope
+        same shape as ell_sat
+
 
     Notes
     -----
@@ -168,5 +176,11 @@ def get_so_noise(tt_file=None, pol_file=None):
     ell_pol = nl_pol[0]
     nl_ee = nl_pol[1]
     nl_bb = nl_pol[1]
+
+    if sat_file:
+        nl_pol = np.loadtxt(sat_file)
+        ell_sat = np.arange(2, nl.size+2)
+        
+        return ell_tt, nl_tt, ell_pol, nl_ee, nl_bb, nl_sat, ell_sat
 
     return ell_tt, nl_tt, ell_pol, nl_ee, nl_bb

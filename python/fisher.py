@@ -97,6 +97,11 @@ class PreCalc(instr.MPIBase):
 
         if self.mpi_rank == 0:
 
+            if kwargs.get('sat_file'):
+                
+                ell_tt, nl_tt, ell_pol, nl_ee, nl_bb, nl_sat, ell_sat = ct.get_so_noise(
+                    **kwargs)
+            
             ell_tt, nl_tt, ell_pol, nl_ee, nl_bb = ct.get_so_noise(
                                                            **kwargs)
 
@@ -1127,6 +1132,11 @@ class Fisher(Bispectrum):
                         # Integrate over r
                         integrand *= r2
                         bispec = trapz_loc(integrand, radii)
+
+                        # notenot
+#                        bispec *= (-1)**(ell1 + ell2 + ell3)
+                        bispec *= np.real((-1j)**(ell1 + ell2 + ell3 - 1))
+                        
 
                         bispectrum[idx1,idx2,idx3,pidx] = bispec
                         
