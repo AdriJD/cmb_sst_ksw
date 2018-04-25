@@ -618,7 +618,7 @@ class Fisher(Bispectrum):
         self.lmax = lmax
         self.lmin = lmin
 
-        lmax = 200 ########## NOTENOTE
+        lmax = 500 ########## NOTENOTE
 
         if lmax < lmin:
             raise ValueError('lmax < lmin')
@@ -657,7 +657,7 @@ class Fisher(Bispectrum):
         ba = np.ones(ells.size, dtype=bool)
 
         for ell1 in ells_sub:
-            print 'rank: {}, ell: {}'.format(self.mpi_rank, ell1)
+#            print 'rank: {}, ell: {}'.format(self.mpi_rank, ell1)
             # which bin?
             idx1 = np.argmax(ell1 < bins) - 1
 
@@ -901,6 +901,8 @@ class Fisher(Bispectrum):
         lmin = ells[0]
         u_ells = self.unique_ells
         num_pass = self.num_pass
+        # convert to float
+        num_pass = num_pass.astype(float)
         first_pass = self.first_pass
 
         wig_t = self.wig_t
@@ -912,9 +914,6 @@ class Fisher(Bispectrum):
         # binned betas
         beta_s = self.depo['scalar']['b_beta']
         beta_t = self.depo['tensor']['b_beta']
-
-        beta_s = self.depo['scalar']['beta']
-        beta_t = self.depo['tensor']['beta']
 
         # get radii corresponing to beta
         radii = self.depo['radii']
@@ -953,10 +952,29 @@ class Fisher(Bispectrum):
         wig9jj = wig.wig9jj
         trapz_loc = trapz
 
-        t0 = time.time()
-        # do not consider the last bin
-        for idx1, i1 in enumerate(bins[:-1]):
 
+        # Scatter outer bins over ranks
+        if self.mpi:
+
+            bins_outer = bins.copy()
+            # remove last bin
+            bins_outer = bins_outer[:-1]
+            idx_outer = np.arange(bins_outer.size)
+
+            # scatter
+            bins_outer = bins_outer[self.mpi_rank::self.mpi_size]
+            idx_outer = idx_outer[self.mpi_rank::self.mpi_size]
+            
+        else:
+            # remove last bin
+            bins_outer = bins.copy()[:-1]
+            idx_outer = np.arange(bins_outer.size)
+
+        t0 = time.time()
+        # Note, we do not consider the last bin
+#        for idx1, i1 in enumerate(bins[:-1]):
+        for idx1, i1 in zip(idx_outer, bins_outer):
+            print self.mpi_rank, idx1
             # load binned beta
             beta_s_l1 = beta_s[idx1,Lidx1,0,0,:,:] # (2,r.size)
             beta_t_l1 = beta_t[idx1,Lidx1,0,0,:,:] # (3,r.size)
@@ -968,7 +986,7 @@ class Fisher(Bispectrum):
             for idx2, i2 in enumerate(bins[idx1:-1]):
                 idx2 += idx1
 
-                # load beta
+                # load binned beta
                 beta_s_l2 = beta_s[idx2,Lidx2,0,0,:,:] # (2,r.size)
                 beta_t_l2 = beta_t[idx2,Lidx2,0,0,:,:] # (3,r.size)
 
@@ -978,17 +996,12 @@ class Fisher(Bispectrum):
                 for idx3, i3 in enumerate(bins[idx2:-1]):
                     idx3 += idx2
 
-#                    tc = time.time()
-
                     num = num_pass[idx1, idx2, idx3]
-                    if num == 0:
+                    if num == 0.:
                         # not a valid tuple
                         continue
 
-#                    print idx1,idx2,idx3, num_pass[idx1,idx2,idx3], first_pass[idx1,idx2,idx3,:]
-                    
-
-                    # load beta
+                    # load binned beta
                     beta_s_l3 = beta_s[idx3,Lidx3,0,0,:,:] # (2,r.size)
                     beta_t_l3 = beta_t[idx3,Lidx3,0,0,:,:] # (3,r.size)
 
@@ -1002,77 +1015,57 @@ class Fisher(Bispectrum):
                     lidx2 = ell2 - lmin
                     lidx3 = ell3 - lmin
 
-#                    print 'aa', ell1, ell2, ell3
-#                    print 'bb', lidx1, lidx2, lidx3
-#                    print 'cc', idx1, idx2, idx3
-#                    print 'dd', num
-
                     L1 = DL1 + ell1
                     L2 = DL2 + ell2
                     L3 = DL3 + ell3
 
-#                    if (L1 + L2 + L3) % 2:
-#                        print 'odd'
-#                        continue
-
-#                    print i1, i2, i3, ell1, ell2, ell3, num
-#                    print (-1j)**(ell1 + ell2 + ell3), (1j)**(L1 + L2 + L3)
-#                    continue
-
-                    # (-1)^((L1+L2+L3) / 2)I_L1L2L3^000 factor is shared
-#                    ang = -1. if (L1 + L2 + L3) % 2 else 1.
-#                    ang = wig.wig3jj([2*L1, 2*L2, 2*L3,
-#                                      0, 0, 0])
+                    # Overall angular part
                     ang = wig3jj([2*L1, 2*L2, 2*L3,
                                   0, 0, 0])
-
-                    
-
+                    ang *= np.real((-1j)**(ell1 + ell2 + ell3 - 1)) 
+                    ang *= (-1)**((L1 + L2 + L3)/2)
+                
                     # calculate the angular parts for each S, S, T comb
                     # TSS
-#                    print ell1, ell2, ell3, L1, L2, L3
                     ang_tss = wig_t[lidx1, Lidx1]
-#                    print 'a', ang_tss
+#                    print ang_tss
                     ang_tss *= wig_s[lidx2, Lidx2]
-#                    print 'b', ang_tss
+#                    print ang_tss
                     ang_tss *= wig_s[lidx3, Lidx2]
-#                    print 'c', ang_tss
+#                    print ang_tss
                     ang_tss *= ang
                     if ang_tss != 0.:
 #                        print 'tss'
                         ang_tss *= wig9jj( [(2*ell1),  (2*ell2),  (2*ell3),
                                                 (2*L1),  (2*L2),  (2*L3),
                                                 4,  2,  2] )
-#                        print ang_tss
                     else:
                         pass
-
-#                    ta = time.time()
 
                     # STS
                     ang_sts = wig_s[lidx1, Lidx2]
                     ang_sts *= wig_t[lidx2, Lidx2]
                     ang_sts *= wig_s[lidx3, Lidx2]
+#                    print ang_tss
                     ang_sts *= ang
                     if ang_sts != 0.:
 #                        print 'sts'
                         ang_sts *= wig9jj( [(2*ell1),  (2*ell2),  (2*ell3),
                                                 (2*L1),  (2*L2),  (2*L3),
                                                 2, 4,  2] )
-#                        print ang_sts
                     else:
                         pass
                     # TSS
                     ang_sst = wig_s[lidx1, Lidx3]
                     ang_sst *= wig_s[lidx2, Lidx3]
                     ang_sst *= wig_t[lidx3, Lidx3]
+#                    print ang_tss
                     ang_sst *= ang
                     if ang_sst != 0.:
-#                        print 'sst'
+ #                       print 'sst'
                         ang_sst *= wig9jj( [(2*ell1),  (2*ell2),  (2*ell3),
                                                 (2*L1),  (2*L2),  (2*L3),
                                                 2,  2,  4] )
- #                       print ang_sst
                     else:
                         pass
 
@@ -1080,10 +1073,16 @@ class Fisher(Bispectrum):
                         # wrong L,ell comb
                         print ell1, ell2, ell3, L1, L2, L3
                         print ang_tss, ang_sts, ang_sst
-                        continue
+                        print np.abs(ell1 - ell2) <= ell3 <= ell1 + ell2
+                        print np.abs(L1 - L2) <= L3 <= L1 + L2
+                        print np.abs(ell1 - L1) <= 2 <= ell1 + L1
+                        print np.abs(ell1 - L1) <= 4 <= ell1 + L1
+                        print np.abs(ell2 - L2) <= 2 <= ell2 + L2
+                        print np.abs(ell2 - L2) <= 4 <= ell2 + L2
+                        print np.abs(ell3 - L3) <= 2 <= ell3 + L3
+                        print np.abs(ell3 - L3) <= 4 <= ell3 + L3
 
-#                    print 'ta', ta - time.time()
-#                    tb = time.time()
+                        continue
 
                     # loop over pol combs
                     for pidx in xrange(psize):
@@ -1133,15 +1132,48 @@ class Fisher(Bispectrum):
                         integrand *= r2
                         bispec = trapz_loc(integrand, radii)
 
-                        # notenot
-#                        bispec *= (-1)**(ell1 + ell2 + ell3)
-                        bispec *= np.real((-1j)**(ell1 + ell2 + ell3 - 1))
-                        
+                        # divide by num (note, already floats)
+                        bispec /= num
 
-                        bispectrum[idx1,idx2,idx3,pidx] = bispec
+                        # divide by Delta_i1i2i3
+                        if i1 == i2 == i3:
+                            bispec /= 6.
+                        elif i1 != i2 != i3:
+                            pass
+                        else:
+                            bispec /= 2.
                         
+                        bispectrum[idx1,idx2,idx3,pidx] = bispec                                    
+            
         bispectrum *= (8 * np.pi)**(3/2.) / 3.
-        return bispectrum
+
+        if not self.mpi:            
+            return bispectrum
+
+        else:
+            # sum all bispectra on root
+            self.barrier()
+
+            # create empty beta for receiving on root
+            if self.mpi_rank == 0:
+
+                bispec_rec = np.zeros_like(bispectrum)
+
+            # loop over all non-root ranks
+            for rank in xrange(1, self.mpi_size):
+
+                # send bispectrum to root
+                if self.mpi_rank == rank:
+                    self._comm.Send(bispectrum, dest=0, tag=rank)
+
+                if self.mpi_rank == 0:
+                    self._comm.Recv(bispec_rec, source=rank, tag=rank)
+
+                    # place into root bispectrum
+                    bispectrum += bispec_rec
+                    bispec_rec[...] = 0.
+
+            return bispectrum
 
 
 #                    print 'b', tb - time.time()

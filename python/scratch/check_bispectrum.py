@@ -5,6 +5,7 @@
 import matplotlib
 matplotlib.use('agg')
 import matplotlib.pyplot as plt
+import matplotlib.colors as colors
 import sys
 import os
 import numpy as np
@@ -38,14 +39,22 @@ bins = F.bins
 
 
 radii = F.get_updated_radii()
-F.beta(radii=radii[::10])
+#F.beta(radii=radii[::10])
+F.beta(radii=radii)
 F.init_pol_triplets()
-if F.mpi_rank == 0:
-    B = F.binned_bispectrum(1, 1, 1)
+B = F.binned_bispectrum(1, 1, 1)
+B += F.binned_bispectrum(1, -1, -1)
+B += F.binned_bispectrum(-1, 1, 1)
+B += F.binned_bispectrum(-1, -1, -1)
+B += F.binned_bispectrum(+1, -1, +1)
+B += F.binned_bispectrum(-1, +1, -1)
 
+
+
+if F.mpi_rank  == 0:
     print B.shape
     plt.figure()
-    plt.imshow(B[0,:,:,0])
+    plt.imshow(B[0,:,:,0], norm=colors.SymLogNorm(linthresh=1e-24))
     plt.colorbar()
     plt.savefig(opj(ana_dir, 'bispectrum/test', 'test.png'))
     plt.close()
@@ -55,3 +64,6 @@ if F.mpi_rank == 0:
     np.save(opj(ana_dir, 'bispectrum/test', 'bins.npy'), F.bins)
     np.save(opj(ana_dir, 'bispectrum/test', 'num_pass.npy'), F.num_pass)
     np.save(opj(ana_dir, 'bispectrum/test', 'first_pass.npy'), F.first_pass)
+    np.save(opj(ana_dir, 'bispectrum/test', 'beta_s.npy'), F.depo['scalar']['b_beta'])
+    np.save(opj(ana_dir, 'bispectrum/test', 'beta_t.npy'), F.depo['tensor']['b_beta'])
+    np.save(opj(ana_dir, 'bispectrum/test', 'pol_trpl.npy'), F.pol_trpl)
