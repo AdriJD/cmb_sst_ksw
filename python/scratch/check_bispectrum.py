@@ -32,7 +32,8 @@ F.get_noise_curves(cross_noise=False, **noise_opts)
 #print F.get_Ls(279, 317, 319, 'sst')
 
 #exit()
-F.init_bins(parity='odd')
+F.init_bins(lmin=2, lmax=100, 
+            parity='odd')
 F.init_wig3j()
 
 bins = F.bins
@@ -40,7 +41,7 @@ bins = F.bins
 
 radii = F.get_updated_radii()
 #F.beta(radii=radii[::10])
-F.beta(radii=radii)
+F.beta(radii=radii[::10])
 F.init_pol_triplets()
 B = F.binned_bispectrum(1, 1, 1)
 B += F.binned_bispectrum(1, -1, -1)

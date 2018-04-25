@@ -242,8 +242,6 @@ class PreCalc(instr.MPIBase):
 
         nfact = f.shape[0]
         ks = f.shape[1]
-        print f.shape
-        print ks
 
         if radii is None:
             radii = self.get_updated_radii()
@@ -277,9 +275,6 @@ class PreCalc(instr.MPIBase):
             radii_per_rank.append(radii[rank::self.mpi_size])
 
         # beta scalar and tensor
-#        beta_s = np.zeros((ells.size, L_range.size, nfact, radii_sub.size, ks, len(pols_s)))
-#        beta_t = np.zeros((ells.size, L_range.size, nfact, radii_sub.size, ks, len(pols_t)))
-
         beta_s = np.zeros((ells.size, L_range.size, nfact, ks, len(pols_s), radii_sub.size))
         beta_t = np.zeros((ells.size, L_range.size, nfact, ks, len(pols_t), radii_sub.size))
 
@@ -569,7 +564,8 @@ class Fisher(Bispectrum):
         wig.wig_temp_init(2 * 8000)
 
 
-    def init_bins(self, bins=None, parity='odd'):
+    def init_bins(self, lmin=None, lmax=None,
+                  bins=None, parity='odd'):
         '''
         Create default ell bins. Stores attributes for
         unique_ells, bins, num_pass and first_pass
@@ -612,13 +608,13 @@ class Fisher(Bispectrum):
         # store parity
         self.depo['parity'] = parity
 
-        lmax = min(lmax_s, lmax_t, lmax_cl, lmax_nl)
-        lmin = lmin_nl
+#        lmax = min(lmax_s, lmax_t, lmax_cl, lmax_nl)
+#        lmin = lmin_nl
 
         self.lmax = lmax
         self.lmin = lmin
 
-        lmax = 500 ########## NOTENOTE
+#        lmax = 500 ########## NOTENOTE
 
         if lmax < lmin:
             raise ValueError('lmax < lmin')
@@ -925,10 +921,6 @@ class Fisher(Bispectrum):
         integrand_sts = integrand.copy()
         integrand_sst = integrand.copy()
 
-        # allocate bispectrum
-        nbins = bins.size
-        bispectrum = np.zeros((nbins, nbins, nbins, psize))
-
         # check parity
         parity = self.depo['parity'] 
         if parity == 'odd' and (DL1 + DL2 + DL3) % 2 == 0:
@@ -954,27 +946,39 @@ class Fisher(Bispectrum):
 
 
         # Scatter outer bins over ranks
-        if self.mpi:
+#        if self.mpi:
 
-            bins_outer = bins.copy()
-            # remove last bin
-            bins_outer = bins_outer[:-1]
-            idx_outer = np.arange(bins_outer.size)
+        bins_outer_f = bins.copy() # f = full
+        # remove last bin
+        bins_outer_f = bins_outer_f[:-1]
+        idx_outer_f = np.arange(bins_outer_f.size)
 
-            # scatter
-            bins_outer = bins_outer[self.mpi_rank::self.mpi_size]
-            idx_outer = idx_outer[self.mpi_rank::self.mpi_size]
+        # scatter
+        bins_outer = bins_outer_f[self.mpi_rank::self.mpi_size]
+        idx_outer = idx_outer_f[self.mpi_rank::self.mpi_size]
+
+        # make every rank knows idx_outer on other ranks
+        idx_per_rank = []
+        for rank in xrange(self.mpi_size):
+            idx_per_rank.append(idx_outer_f[rank::self.mpi_size])
             
-        else:
+#        else:
             # remove last bin
-            bins_outer = bins.copy()[:-1]
-            idx_outer = np.arange(bins_outer.size)
+#        bins_outer = bins.copy()[:-1]
+#        idx_outer = np.arange(bins_outer.size)
+
+        # allocate bispectrum
+        nbins = bins.size - 1 # note, not storing last bin
+        bispectrum = np.zeros((bins_outer.size, nbins, nbins, psize))
+#        else:
+#            bispectrum = np.zeros((nbins, nbins, nbins, psize))
 
         t0 = time.time()
         # Note, we do not consider the last bin
-#        for idx1, i1 in enumerate(bins[:-1]):
-        for idx1, i1 in zip(idx_outer, bins_outer):
-            print self.mpi_rank, idx1
+        for idxb, (idx1, i1) in enumerate(zip(idx_outer, bins_outer)):
+            # note, idxb is bins_outer index for bispectrum per rank
+            # idx1 is index to full-sized bin array, i1 is bin
+            print self.mpi_rank, idxb, idx1
             # load binned beta
             beta_s_l1 = beta_s[idx1,Lidx1,0,0,:,:] # (2,r.size)
             beta_t_l1 = beta_t[idx1,Lidx1,0,0,:,:] # (3,r.size)
@@ -1143,7 +1147,7 @@ class Fisher(Bispectrum):
                         else:
                             bispec /= 2.
                         
-                        bispectrum[idx1,idx2,idx3,pidx] = bispec                                    
+                        bispectrum[idxb,idx2,idx3,pidx] = bispec                                    
             
         bispectrum *= (8 * np.pi)**(3/2.) / 3.
 
@@ -1154,13 +1158,27 @@ class Fisher(Bispectrum):
             # sum all bispectra on root
             self.barrier()
 
-            # create empty beta for receiving on root
+            # create empty full-sized bispectrum on root
             if self.mpi_rank == 0:
 
-                bispec_rec = np.zeros_like(bispectrum)
+                bispec_full = np.zeros((bins_outer_f.size,nbins,nbins,psize))
+                
+                # place sub B on root in full B for root
+                for i, fidx in enumerate(idx_per_rank[0]):
+                    # i is index to sub, fidx index to full
+                    print bispec_full.shape, bispectrum.shape
+                    bispec_full[fidx,...] = bispectrum[i,...]
+
+            else:
+                bispec_full = 0
 
             # loop over all non-root ranks
             for rank in xrange(1, self.mpi_size):
+
+                if self.mpi_rank == 0:
+                    # allocate B sub on root for receiving
+                    bin_size = idx_per_rank[rank].size
+                    bispec_rec = np.zeros((bin_size,nbins,nbins,psize))
 
                 # send bispectrum to root
                 if self.mpi_rank == rank:
@@ -1169,27 +1187,18 @@ class Fisher(Bispectrum):
                 if self.mpi_rank == 0:
                     self._comm.Recv(bispec_rec, source=rank, tag=rank)
 
-                    # place into root bispectrum
-                    bispectrum += bispec_rec
-                    bispec_rec[...] = 0.
+                    # place into root bispectrum                    
+                    for i, fidx in enumerate(idx_per_rank[rank]):
+                        # i is index to sub, fidx index to full
+                        bispec_full[fidx,...] = bispec_rec[i,...]
 
-            return bispectrum
+#                        bispectrum += bispec_rec
+#                        bispec_rec[...] = 0.
 
-
-#                    print 'b', tb - time.time()
-#                    print 'c', tc - time.time()
-#                        print '0', rad_int, '1', ang_tss, '2', ang_sts, '3', ang_sst
-
-                        # factor (-i)^sum(ell) in eq. 6.19 shiraishi. Cancels with earlier factor
-#                        rad_int *=
-
-#                        bispectrum[idx1,idx2,idx3,pidx] =
-
-
+#            return bispectrum
+            return bispec_full
 
         print time.time() - t0
-
-        # load up
 
     def get_Ls(self, ell1, ell2, ell3, prim_type):
         '''

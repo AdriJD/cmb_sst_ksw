@@ -21,12 +21,14 @@ test_dir = opj(ana_dir, 'bispectrum/test')
 
 B = np.load(opj(test_dir, 'test.npy'))
 bins = np.load(opj(test_dir, 'bins.npy'))
+bins = bins[:-1] # last bin is not saved in B anymore
 beta_s = np.load(opj(test_dir, 'beta_s.npy'))
 beta_t = np.load(opj(test_dir, 'beta_t.npy'))
 pol_trpl = np.load(opj(test_dir, 'pol_trpl.npy'))
 
-idx = 20
+idx = 60
 lmax = bins[-1]
+print lmax
 
 # ell grid
 ell = np.arange(lmax+1)
@@ -65,7 +67,7 @@ for pidx, pol in enumerate(pol_trpl):
 
     axs_idx = np.divmod(pidx,3)
     ax = axs[axs_idx]
-    im = ax.imshow(zi.T, extent=(0,lmax+40,0,lmax+40), 
+    im = ax.imshow(np.abs(zi.T), extent=(0,lmax,0,lmax), 
               origin='lower')#, norm=colors.SymLogNorm(linthresh=1e-24))
     ax.text(0.1, 0.9, str(pol), transform=ax.transAxes)
     fig.colorbar(im, ax=ax)
