@@ -69,7 +69,7 @@ for pidx, pol in enumerate(pol_trpl):
     B_slice *= (b1 * b2)**2
 
     # make B antisymmetric
-    B_slice += -B_slice.T
+#    B_slice += -B_slice.T  #NOTENOTE
     
     B_slice_r = B_slice.copy()
     B_slice_r[B_slice_r == 0] = np.nan

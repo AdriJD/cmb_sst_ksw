@@ -507,6 +507,22 @@ class Bispectrum(PreCalc):
         '''
         eq. 18 from Meerburg 2016 without the angular
         dependent parts and I = local
+
+        Returns
+        -------
+        template : array-like
+            shape (2, k.size) used for beta, alpha
+            for beta we simply have k^-3, for alpha
+            just an array of ones.
+        amp : float
+            Amplitude of local primordial <>
+            Following Meerburg we set:
+            <>
+
+        Notes
+        -----
+        <h zeta zeta > = (2pi)^3 f(k1, k2, k3) delta()
+
         '''
 
         amp = (2 * np.pi)**3 * 16 * np.pi**4 * self.scalar_amp * np.sqrt(self.r)
@@ -978,7 +994,7 @@ class Fisher(Bispectrum):
                     idx3 += idx2
 
                     num = num_pass[idx1, idx2, idx3]
-                    if num == 0.:
+                    if num == 0.: 
                         # not a valid tuple
                         continue
 
@@ -1013,7 +1029,6 @@ class Fisher(Bispectrum):
                     # TSS
                     ang_tss = wig_t[lidx1, Lidx1]
                     ang_tss *= wig_s[lidx2, Lidx2]
-#                    ang_tss *= wig_s[lidx3, Lidx2]
                     ang_tss *= wig_s[lidx3, Lidx3]
                     ang_tss *= ang
                     if ang_tss != 0.: 
@@ -1025,9 +1040,6 @@ class Fisher(Bispectrum):
                         pass
 
                     # STS
-#                    ang_sts = wig_s[lidx1, Lidx2]
-#                    ang_sts *= wig_t[lidx2, Lidx2]
-#                    ang_sts *= wig_s[lidx3, Lidx2]
                     ang_sts = wig_s[lidx1, Lidx1]
                     ang_sts *= wig_t[lidx2, Lidx2]
                     ang_sts *= wig_s[lidx3, Lidx3]
@@ -1039,9 +1051,6 @@ class Fisher(Bispectrum):
                     else:
                         pass
                     # TSS
-#                    ang_sst = wig_s[lidx1, Lidx3]
-#                    ang_sst *= wig_s[lidx2, Lidx3]
-#                    ang_sst *= wig_t[lidx3, Lidx3]
                     ang_sst = wig_s[lidx1, Lidx1]
                     ang_sst *= wig_s[lidx2, Lidx2]
                     ang_sst *= wig_t[lidx3, Lidx3]
@@ -1126,7 +1135,7 @@ class Fisher(Bispectrum):
                         # Multiply by num (note, already floats)
                         # Note that for plotting purposes, you need to remvove
                         # the num factor again
-                        bispec *= num
+                        bispec *= num 
 
                         # divide by Delta_i1i2i3, note bins, not ells
                         if i1 == i2 == i3:
