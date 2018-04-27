@@ -14,7 +14,7 @@ sys.path.insert(0,'./../')
 import fisher
 
 lmin = 2
-lmax = 400
+lmax = 200
 
 opj = os.path.join
 ana_dir = '/mn/stornext/d8/ITA/spider/adri/analysis/20171217_sst/'

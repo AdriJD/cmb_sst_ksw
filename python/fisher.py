@@ -518,10 +518,8 @@ class Bispectrum(PreCalc):
         km3 = ks**-3
         ones = np.ones(ks.size)
 
-#        template = np.asarray([[km3, km3, ones], [km3, ones, km3], [ones, km3,km3]])
         km3 *= amp
         template = np.asarray([km3, ones])
-#        template *= amp
 
         return template
 
@@ -538,7 +536,6 @@ class Bispectrum(PreCalc):
         '''
         pass
 
-#class Fisher(Bispectrum, Experiment):
 class Fisher(Bispectrum):
 
     def __init__(self, **kwargs):
@@ -555,14 +552,23 @@ class Fisher(Bispectrum):
         wig.wig_temp_init(2 * 8000)
 
 
+    def get_default_bins(self):
+        '''
+        Return bins
+        '''
+
     def init_bins(self, lmin=None, lmax=None,
                   bins=None, parity='odd'):
         '''
-        Create default ell bins. Stores attributes for
+        Create default bins in ell-space. Stores attributes for
         unique_ells, bins, num_pass and first_pass
 
         Keyword Arguments
         -----------------
+        lmin : int
+            Value of first bin
+        lmax : int
+             Create bins up to (but not including lmax)
         bins : array-like
             Lower value of bins in ell
         parity : str
@@ -599,13 +605,8 @@ class Fisher(Bispectrum):
         # store parity
         self.depo['parity'] = parity
 
-#        lmax = min(lmax_s, lmax_t, lmax_cl, lmax_nl)
-#        lmin = lmin_nl
-
         self.lmax = lmax
         self.lmin = lmin
-
-#        lmax = 500 ########## NOTENOTE
 
         if lmax < lmin:
             raise ValueError('lmax < lmin')
@@ -805,10 +806,11 @@ class Fisher(Bispectrum):
     def init_wig3j(self):
         '''
         Precompute I^000_lL1 and I^20-2_lL2 for all unique ells
-        and \Delta L \in [-1, 1] and [-2, -1, 0, 1, 2]
+        and \Delta L \in [-2, -1, 0, 1, 2]
 
-        Store internally as wig_s and wig_t
-        shape = (ells.size, \Delta L)
+        Store internally as wig_s and wig_t arrays with shape:
+        (ells.size, (\Delta L = 5)). So full ell array, although
+        only the unique ells are calculated.
         '''
 
         u_ells = self.unique_ells
@@ -820,13 +822,14 @@ class Fisher(Bispectrum):
         wig_t = np.zeros((ells.size, 5))
 
         for ell in u_ells:
+            # ell is full-sized, so we can simply infer the indices
             lidx = ell - lmin
 
             for Lidx, DL in enumerate([-2, -1, 0, 1, 2]):
 
                 L = ell + DL
                 if DL == -1 or DL == 1:
-
+                    # only here we need to fill the scalar factor
                     tmp = wig.wig3jj([2*ell, 2*L, 2,
                                       0, 0, 0])
                     tmp *= np.sqrt((2 * L + 1) * (2 * ell + 1) * 3)
@@ -866,7 +869,6 @@ class Fisher(Bispectrum):
         pol_trpl[11] = 2, 1, 1
 
         self.pol_trpl = pol_trpl
-
 
     def binned_bispectrum(self, DL1, DL2, DL3):
         '''
@@ -987,6 +989,7 @@ class Fisher(Bispectrum):
                     alpha_s_l3 = beta_s[idx3,Lidx3,0,1,:,:] # (2,r.size)
                     alpha_t_l3 = beta_t[idx3,Lidx3,0,1,:,:] # (3,r.size)
 
+                    # Load the ell triplets used per bin
                     ell1, ell2, ell3 = first_pass[idx1, idx2, idx3,:]
 
                     # indices to full-size ell arrays
@@ -998,7 +1001,9 @@ class Fisher(Bispectrum):
                     L2 = DL2 + ell2
                     L3 = DL3 + ell3
 
-                    # Overall angular part
+                    # Calculate the angular prefactor (eq. 6.19 thesis Shiraishi)
+                    # before polarization loop 
+                    # Overall angular part 
                     ang = wig3jj([2*L1, 2*L2, 2*L3,
                                   0, 0, 0])
                     ang *= np.real((-1j)**(ell1 + ell2 + ell3 - 1)) 
@@ -1007,41 +1012,42 @@ class Fisher(Bispectrum):
                     # calculate the angular parts for each S, S, T comb
                     # TSS
                     ang_tss = wig_t[lidx1, Lidx1]
-#                    print ang_tss
                     ang_tss *= wig_s[lidx2, Lidx2]
-#                    print ang_tss
-                    ang_tss *= wig_s[lidx3, Lidx2]
-#                    print ang_tss
+#                    ang_tss *= wig_s[lidx3, Lidx2]
+                    ang_tss *= wig_s[lidx3, Lidx3]
                     ang_tss *= ang
-                    if ang_tss != 0.:
-#                        print 'tss'
+                    if ang_tss != 0.: 
                         ang_tss *= wig9jj( [(2*ell1),  (2*ell2),  (2*ell3),
                                                 (2*L1),  (2*L2),  (2*L3),
                                                 4,  2,  2] )
                     else:
+                        # don't waste time on 9j if zero anyway
                         pass
 
                     # STS
-                    ang_sts = wig_s[lidx1, Lidx2]
+#                    ang_sts = wig_s[lidx1, Lidx2]
+#                    ang_sts *= wig_t[lidx2, Lidx2]
+#                    ang_sts *= wig_s[lidx3, Lidx2]
+                    ang_sts = wig_s[lidx1, Lidx1]
                     ang_sts *= wig_t[lidx2, Lidx2]
-                    ang_sts *= wig_s[lidx3, Lidx2]
-#                    print ang_tss
+                    ang_sts *= wig_s[lidx3, Lidx3]
                     ang_sts *= ang
                     if ang_sts != 0.:
-#                        print 'sts'
                         ang_sts *= wig9jj( [(2*ell1),  (2*ell2),  (2*ell3),
                                                 (2*L1),  (2*L2),  (2*L3),
                                                 2, 4,  2] )
                     else:
                         pass
                     # TSS
-                    ang_sst = wig_s[lidx1, Lidx3]
-                    ang_sst *= wig_s[lidx2, Lidx3]
+#                    ang_sst = wig_s[lidx1, Lidx3]
+#                    ang_sst *= wig_s[lidx2, Lidx3]
+#                    ang_sst *= wig_t[lidx3, Lidx3]
+                    ang_sst = wig_s[lidx1, Lidx1]
+                    ang_sst *= wig_s[lidx2, Lidx2]
                     ang_sst *= wig_t[lidx3, Lidx3]
-#                    print ang_tss
+
                     ang_sst *= ang
                     if ang_sst != 0.:
- #                       print 'sst'
                         ang_sst *= wig9jj( [(2*ell1),  (2*ell2),  (2*ell3),
                                                 (2*L1),  (2*L2),  (2*L3),
                                                 2,  2,  4] )
@@ -1049,7 +1055,7 @@ class Fisher(Bispectrum):
                         pass
 
                     if ang_tss == 0. and ang_sts == 0. and ang_sst == 0.:
-                        # wrong L,ell comb
+                        # wrong L,ell comb, determine what went wrong
                         print ell1, ell2, ell3, L1, L2, L3
                         print ang_tss, ang_sts, ang_sst
                         print np.abs(ell1 - ell2) <= ell3 <= ell1 + ell2
@@ -1060,8 +1066,8 @@ class Fisher(Bispectrum):
                         print np.abs(ell2 - L2) <= 4 <= ell2 + L2
                         print np.abs(ell3 - L3) <= 2 <= ell3 + L3
                         print np.abs(ell3 - L3) <= 4 <= ell3 + L3
-
-                        continue
+                        raise ValueError("angular prefactor is zero")
+                        #continue
 
                     # loop over pol combs
                     for pidx in xrange(psize):
@@ -1076,6 +1082,8 @@ class Fisher(Bispectrum):
                             # no B-mode for scalar or this l, L combination
                             pass
                         else:
+                            if pidx1 == 2:
+                                assert (1 + L1 + ell1)%2 == 0
                             integrand_tss[:] = beta_t_l1[pidx1,:] * beta_s_l2[pidx2,:] * alpha_s_l3[pidx3,:]
                             integrand_tss += beta_t_l1[pidx1,:] * alpha_s_l2[pidx2,:] * beta_s_l3[pidx3,:]
                             integrand_tss += alpha_t_l1[pidx1,:] * beta_s_l2[pidx2,:] * beta_s_l3[pidx3,:]
@@ -1088,6 +1096,8 @@ class Fisher(Bispectrum):
                             # no B-mode for scalar
                             pass
                         else:
+                            if pidx2 == 2:
+                                assert (1 + L2 + ell2)%2 == 0
                             integrand_sts[:] = beta_s_l1[pidx1,:] * beta_t_l2[pidx2,:] * alpha_s_l3[pidx3,:]
                             integrand_sts += beta_s_l1[pidx1,:] * alpha_t_l2[pidx2,:] * beta_s_l3[pidx3,:]
                             integrand_sts += alpha_s_l1[pidx1,:] * beta_t_l2[pidx2,:] * beta_s_l3[pidx3,:]
@@ -1100,6 +1110,8 @@ class Fisher(Bispectrum):
                             # no B-mode for scalar
                             pass
                         else:
+                            if pidx3 == 2:
+                                assert (1 + L3 + ell3)%2 == 0
                             integrand_sst[:] = beta_s_l1[pidx1,:] * beta_s_l2[pidx2,:] * alpha_t_l3[pidx3,:]
                             integrand_sst += beta_s_l1[pidx1,:] * alpha_s_l2[pidx2,:] * beta_t_l3[pidx3,:]
                             integrand_sst += alpha_s_l1[pidx1,:] * beta_s_l2[pidx2,:] * beta_t_l3[pidx3,:]
@@ -1111,11 +1123,12 @@ class Fisher(Bispectrum):
                         integrand *= r2
                         bispec = trapz_loc(integrand, radii)
 
-                        # divide by num (note, already floats)
-#                        bispec /= num
-#                        bispec *= num
+                        # Multiply by num (note, already floats)
+                        # Note that for plotting purposes, you need to remvove
+                        # the num factor again
+                        bispec *= num
 
-                        # divide by Delta_i1i2i3
+                        # divide by Delta_i1i2i3, note bins, not ells
                         if i1 == i2 == i3:
                             bispec /= 6.
                         elif i1 != i2 != i3:
@@ -1127,11 +1140,9 @@ class Fisher(Bispectrum):
             
         bispectrum *= (8 * np.pi)**(3/2.) / 3.
 
-        if not self.mpi:            
-            return bispectrum
-
-        else:
-            # sum all bispectra on root
+        # Each rank has, for a unordered set of i1, the i2, i3, pol bispectra 
+        # Now we add them together on the root rank
+        if self.mpi:
             self.barrier()
 
             # create empty full-sized bispectrum on root
@@ -1170,304 +1181,12 @@ class Fisher(Bispectrum):
 
             return bispec_full
 
-        print time.time() - t0
-
-    def get_Ls(self, ell1, ell2, ell3, prim_type):
-        '''
-        Arguments
-        ---------
-        ell1, ell2, ell3 : int
-            Multipoles
-        prim_type : str
-            Primoridal 3-point type. Either 'tss', 'sts', 'sst'
-
-        Returns
-        -------
-        Ls : array-like
-            Shape (20, 3), nan where triangle cond is not met
-            or sum is odd.
-        '''
-        Ls = np.empty((20, 3))
-
-        if prim_type == 'tss':
-
-            Ls1 = range(ell1 - 2, ell1 + 3)
-            Ls2 = [ell2 - 1, ell2 + 1]
-            Ls3 = [ell3 - 1, ell3 + 1]
-
-        elif prim_type == 'sts':
-
-            Ls1 = [ell1 - 1, ell1 + 1]
-            Ls2 = range(ell2 - 2, ell2 + 3)
-            Ls3 = [ell3 - 1, ell3 + 1]
-
-        elif prim_type == 'sst':
-
-            Ls1 = [ell1 - 1, ell1 + 1]
-            Ls2 = [ell2 - 1, ell2 + 1]
-            Ls3 = range(ell3 - 2, ell3 + 3)
-
-        n = 0
-        for i, L3 in enumerate(Ls1):
-            for j, L2 in enumerate(Ls2):
-                for k, L1 in enumerate(Ls3):
-
-                    if (L1 + L2 + L3) % 2:
-                        # sum is odd
-                        Ls[n,:] = np.nan
-                        n += 1
-                        continue
-
-                    # triangle condition on Ls
-                    elif not abs(L1 - L2) <= L3:
-                        Ls[n,:] = np.nan
-                        n += 1
-                        continue
-
-                    elif not L3 <= (L1 + L2):
-                        Ls[n,:] = np.nan
-                        n += 1
-                        continue
-
-                    Ls[n] = L1, L2, L3
-
-        # how does the fisher loop know which L's to skip
-        # depending on pol? I guess another if statemant there
-        return Ls
-
-
-    def binned_fisher(self):
-        '''
-        Loop over bins, and compute fisher
-        '''
-
-
-
-        # probably MPI ell bins
-
-
-        pass
-
-
-
-
-    def init_ell(self):
-        '''
-        Precompute all valid l1, l2, l3 and 1/Delta
-        l1, l2, l3 already pass triangle condition
-        '''
-
-        lmax_s = self.depo['scalar']['lmax']
-        lmax_t = self.depo['tensor']['lmax']
-
-        ells = []
-        idelta = []
-
-        print 'determining l1, l2, l3 and 1/Delta'
-
-        for l1 in xrange(2, lmax_s+1):
-
-            for l2 in xrange(2, l1+1):
-                for l3 in xrange(2, min(l2, lmax_t)+1):
-                    if np.abs(l1 - l2) <= l3 <= l1 + l2:
-                        if l1 != l2 != l3:
-                            idelta.append(1)
-                        elif l1 == l2 == l3:
-                            idelta.append(1/6.)
-                        else:
-                            idelta.append(0.5)
-
-                        ells.append([l1, l2, l3])
-
-
-        ells = np.asarray(ells)
-        ells = np.ascontiguousarray(ells)
-
-        idelta = np.asarray(idelta)
-        idelta = np.ascontiguousarray(idelta)
-
-        print 'done'
-
-        self.ells = ells
-        self.idelta = idelta
-
-        return ells, idelta
-
-    def init_Ls(self):
-        '''
-        Get L1, L2, L3 that pass triangle condition
-        with themselves and other 3 wigner 3js.
-        '''
-
-        print 'determining L1, L2, L3'
-        num_ells = self.ells.shape[0]
-        print num_ells
-        l1 = self.ells[:,0]
-        l2 = self.ells[:,1]
-        l3 = self.ells[:,2]
-
-        Ls = np.zeros((num_ells, 20, 3), dtype=int) # 2 * 2 * 5
-        tri_cond = np.ones((num_ells, 20), dtype=bool)
-
-        for i, dL3 in enumerate([-2, -1, 0, 1, 2]):
-            for j, dL2 in enumerate([-1, 1]):
-                for k, dL1 in enumerate([-1, 1]):
-
-                    L1 = l1 + dL1
-                    L2 = l2 + dL2
-                    L3 = l3 + dL3
-
-                    idx = 9 * i + 3 * j + k
-
-                    Ls[:,idx,0] = L1
-                    Ls[:,idx,1] = L2
-                    Ls[:,idx,2] = L3
-
-                    # internal triangle cond
-                    tri_cond[:,idx] *= np.abs(L1 - L2) <= L3
-                    tri_cond[:,idx] *= L3 <= (L1 + L2)
-
-                    # sum must be even
-                    even_cond = np.mod(L1 + L2 + L3, 2) - 1
-                    tri_cond[:,idx] *= even_cond.astype(bool)
-
-        Ls = np.ascontiguousarray(Ls)
-        tri_cond = np.ascontiguousarray(tri_cond)
-
-        print 'done'
-
-        self.Ls = Ls
-        self.tri_cond = tri_cond
-        return Ls, tri_cond
-
-
-
-    def inverse_delta(self, l1, l2, l3):
-
-        if l1 != l2 != l3:
-            return 1.
-        elif l1 == l2 == l3:
-            return 1/6.
         else:
-            return 0.5
-
-#    def get_Ls(self, l1, l2, l3, DL1, DL2, DL3):
-#        '''
-#        DL : array-like
-#            e.g. [-2, -1, 0, 1, 2]
-#        '''
-
-#        L1 = DL1 + l1
-#        L2 = DL2 + l2
-#        L3 = DL3 + l3
-
-#        return np.array(np.meshgrid(L1, L2, L3)).T.reshape(-1,3)
-
-    def fisher_new(self):
-
-        lmax_s = self.depo['scalar']['lmax']
-        lmax_t = self.depo['tensor']['lmax']
-
-        fisher_tot = 512 * np.pi**3 / 9.
-
-        DL1 = np.array([-1, 1])
-        DL2 = np.array([-1, 1])
-        DL3 = np.array([-2, -1, 0, 1, 2])
-
-        # to store H_L1L2L3 for given l1 l2 l3
-        tmp = np.zeros((DL1.size * DL2.size * DL3.size))
-
-        # arguments for 9j
-        arg9j = np.zeros(9, dtype=int)
-        arg9j[6:10] = 2, 2, 4
-
-        Lidx = np.array(np.meshgrid(np.arange(DL1.size),
-                                    np.arange(DL2.size),
-                                    np.arange(DL3.size))).T.reshape(-1,3)
-
-        for l1 in xrange(2, lmax_s+1):
-            idx1 = l1 - 2
-            print l1
-            for l2 in xrange(2, l1+1):
-                idx2 = l2 - 2
-
-                for l3 in xrange(2, min(l2, lmax_t)+1):
-
-                    if not np.abs(l1 - l2) <= l3 <= l1 + l2:
-                        continue
-
-                    idx3 = l3 - 2
-
-                    fisher = self.inverse_delta(l1, l2, l3)
-
-                    arg9j[0:3] = l1, l2, l3
-                    arg9j[0:3] *= 2
-
-                    # get L1, L2, L3, L4, L5, L6
-                    Ls = self.get_Ls(l1, l2, l3, DL1, DL2, DL3)
-
-                    for idx, (L1, L2, L3) in enumerate(Ls):
-
-                        # L1 L2 L3 0 0 0 wigner
-                        tmp[idx] = wig.wig3jj([2*L1, 2*L2, 2*L3, 0, 0, 0])
-#                        tmp = 1
-                        # triangle condition on L1 L2 L3 and sum(L) is even
-                        if not tmp[idx]:
-                            continue
-
-                        # 9j
-                        arg9j[3:6] = L1, L2, L3
-                        arg9j[3:6] *= 2
-
-                        tmp[idx] *= wig.wig9jj(arg9j)
-
-                        # triangle condition on 9j
-                        if not tmp[idx]:
-                            continue
-
-                        # find the indices of pre_s and pre_t
-                        L1idx = Lidx[idx][0]
-                        L2idx = Lidx[idx][1]
-                        L3idx = Lidx[idx][2]
-
-                        # product of wigner 3js
-                        tmp[idx] *= self.pre_s[idx1, L1idx]
-                        tmp[idx] *= self.pre_s[idx2, L2idx]
-                        tmp[idx] *= self.pre_t[idx3, L3idx]
-
-                        # sign (odd combinations are gone already)
-                        tmp[idx] *= (-1)**(L1 + L2 + L3)
-#                        print tmp
-
-                    # reset tmp
-                    tmp *= 0
+            # no MPI, so process already has full bispectrum
+            return bispectrum
 
 
-
-    def fisher(self, comb='sstsst'):
-        '''
-        comb : str
-            What combination of bispectra, e.g. sstsst
-        '''
-
-        DL1 = np.array([-1, 0, 1])
-        DL2 = np.array([-1, 0, 1])
-        DL3 = np.array([-2, -1, 0, 1, 2])
-
-        for i, (l1, l2, l3) in enumerate(pc.ells):
-            print idelta[i], (l1, l2, l3)
-            Ls = pc.Ls[i]
-            tri_cond = pc.tri_cond[i]
-
-            n = 0
-            print Ls[tri_cond].shape
-
-            for j, (L1, L2, L3) in enumerate(Ls[tri_cond]):
-                    for k, (L4, L5, L6) in enumerate(Ls[tri_cond]):
-
-                        print L1, L2, L3, L4, L5, L6, n
-                        n+= 1
-
+        print time.time() - t0
 
 
 if __name__ == '__main__':

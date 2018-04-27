@@ -20,6 +20,12 @@ ana_dir = '/mn/stornext/d8/ITA/spider/adri/analysis/20171217_sst/'
 test_dir = opj(ana_dir, 'bispectrum/test')
 
 B = np.load(opj(test_dir, 'test.npy'))
+num_pass = np.load(opj(test_dir, 'num_pass.npy'))
+num_pass = num_pass[:-1,:-1,:-1]
+
+# For plotting, divide out num pass, note that last bin is removed from bispectrum
+B[num_pass != 0,:] /= num_pass[num_pass != 0,np.newaxis]
+
 bins = np.load(opj(test_dir, 'bins.npy'))
 bins = bins[:-1] # last bin is not saved in B anymore
 #beta_s = np.load(opj(test_dir, 'beta_s.npy'))
