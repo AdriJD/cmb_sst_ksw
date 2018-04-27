@@ -89,6 +89,7 @@ class PreCalc(instr.MPIBase):
             Path to TT file
         pol_file : str
             Path to EE, BB file
+            
         '''
 
         nls = None
@@ -214,6 +215,9 @@ class PreCalc(instr.MPIBase):
             (default : [0])
         bin : bool
             Bin the resulting beta in ell. (default : True)
+        optimize : bool
+            Do no calculate spherical bessel for kr << L (default : 
+            True)
         Returns
         -------
         beta : array-like
@@ -480,21 +484,8 @@ class PreCalc(instr.MPIBase):
 
         return
 
-#class Experiment(object):
-#    '''
-#    Experimental details such as noise, fsky, pol
-#    '''
-#
-#    def __init__(self, fsky=1.):
-#
-#        self.fsky = fsky
-#
-#    def get_noise(self):
-#        '''
-#        Load noise curves
-#        '''
 
-        # column colin: [ell] [N_ell^TT in uK^2] [N_ell^yy (dimensionless)]
+
 
 class Bispectrum(PreCalc):
     '''
@@ -585,7 +576,7 @@ class Fisher(Bispectrum):
             unique_ells : array-like
                 Values of ell that are used (for alpha, beta)
             bins : array-like
-                Bin multipoles (same as Meerbug 2016)
+                Bin multipoles (same as Meerburg 2016)
             num_pass : array-like
                    number of tuples per 3d bin that pass triangle
                    condition. No parity check right now.
@@ -620,8 +611,10 @@ class Fisher(Bispectrum):
             raise ValueError('lmax < lmin')
 
         # bins used in Meerburg 2016
-        bins_0 = np.arange(lmin, 101, 1)
-        bins_1 = np.arange(110, 510, 10)
+#        bins_0 = np.arange(lmin, 101, 1)
+        bins_0 = np.arange(lmin, 151, 1)
+#        bins_1 = np.arange(110, 510, 10)
+        bins_1 = np.arange(160, 510, 10)
         bins_2 = np.arange(520, 8000, 20)
         bins = np.concatenate((bins_0, bins_1, bins_2))
 
@@ -821,9 +814,6 @@ class Fisher(Bispectrum):
         u_ells = self.unique_ells
         ells = self.ells
 
-#        u_ells = np.arange(40, 200)
-#        ells = np.arange(40, 200)
-
         lmin = ells[0]
 
         wig_s = np.zeros((ells.size, 5))
@@ -832,7 +822,6 @@ class Fisher(Bispectrum):
         for ell in u_ells:
             lidx = ell - lmin
 
-#            for Lidx, DL in enumerate([-1, 1]):
             for Lidx, DL in enumerate([-2, -1, 0, 1, 2]):
 
                 L = ell + DL
@@ -843,9 +832,6 @@ class Fisher(Bispectrum):
                     tmp *= np.sqrt((2 * L + 1) * (2 * ell + 1) * 3)
                     tmp /= (2 * np.sqrt(np.pi))
                     wig_s[lidx,Lidx] = tmp
-
-#            for Lidx, DL in enumerate([-2, -1, 0, 1, 2]):
-#                L = ell + DL
 
                 tmp = wig.wig3jj([2*ell, 2*L, 4,
                                   4, 0, -4])
@@ -944,10 +930,6 @@ class Fisher(Bispectrum):
         wig9jj = wig.wig9jj
         trapz_loc = trapz
 
-
-        # Scatter outer bins over ranks
-#        if self.mpi:
-
         bins_outer_f = bins.copy() # f = full
         # remove last bin
         bins_outer_f = bins_outer_f[:-1]
@@ -962,16 +944,9 @@ class Fisher(Bispectrum):
         for rank in xrange(self.mpi_size):
             idx_per_rank.append(idx_outer_f[rank::self.mpi_size])
             
-#        else:
-            # remove last bin
-#        bins_outer = bins.copy()[:-1]
-#        idx_outer = np.arange(bins_outer.size)
-
         # allocate bispectrum
         nbins = bins.size - 1 # note, not storing last bin
         bispectrum = np.zeros((bins_outer.size, nbins, nbins, psize))
-#        else:
-#            bispectrum = np.zeros((nbins, nbins, nbins, psize))
 
         t0 = time.time()
         # Note, we do not consider the last bin
@@ -1137,7 +1112,8 @@ class Fisher(Bispectrum):
                         bispec = trapz_loc(integrand, radii)
 
                         # divide by num (note, already floats)
-                        bispec /= num
+#                        bispec /= num
+#                        bispec *= num
 
                         # divide by Delta_i1i2i3
                         if i1 == i2 == i3:
@@ -1192,10 +1168,6 @@ class Fisher(Bispectrum):
                         # i is index to sub, fidx index to full
                         bispec_full[fidx,...] = bispec_rec[i,...]
 
-#                        bispectrum += bispec_rec
-#                        bispec_rec[...] = 0.
-
-#            return bispectrum
             return bispec_full
 
         print time.time() - t0

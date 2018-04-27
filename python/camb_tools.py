@@ -160,6 +160,8 @@ def get_so_noise(tt_file=None, pol_file=None, sat_file=None):
     -----
     Assumes that TT textfile has colums as: ell, TT, yy
     and pol txt file has ell, EE, BB. Ell is in steps of 1
+
+    columns colin: [ell] [N_ell^TT in uK^2] [N_ell^yy (dimensionless)]
     '''
     
     nl_tt = np.loadtxt(tt_file)
