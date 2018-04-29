@@ -628,10 +628,10 @@ class Fisher(Bispectrum):
             raise ValueError('lmax < lmin')
 
         # bins used in Meerburg 2016
-#        bins_0 = np.arange(lmin, 101, 1)
-        bins_0 = np.arange(lmin, 151, 1)
-#        bins_1 = np.arange(110, 510, 10)
-        bins_1 = np.arange(160, 510, 10)
+        bins_0 = np.arange(lmin, 101, 1)
+#        bins_0 = np.arange(lmin, 151, 1)
+        bins_1 = np.arange(110, 510, 10)
+#        bins_1 = np.arange(160, 510, 10)
         bins_2 = np.arange(520, 8000, 20)
         bins = np.concatenate((bins_0, bins_1, bins_2))
 
