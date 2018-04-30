@@ -18,9 +18,8 @@ import warnings
 opj = os.path.join
 
 class PreCalc(instr.MPIBase):
-#class PreCalc(object):
 
-    def __init__(self, camb_dir='.'):
+    def __init__(self, camb_dir='.', **kwargs):
         '''
 
         Keyword arguments
@@ -35,8 +34,28 @@ class PreCalc(instr.MPIBase):
 
         self.depo['init_bins'] = False
 
-        super(PreCalc, self).__init__()
+        # Extract kwargs for loading CAMB output, such that
+        # they do not get passed to MPIBase
+        tag = kwargs.pop('tag')
+        lensed = kwargs.pop('lensed')
+        camb_opts = dict(tag=tag, lensed=lensed)
 
+        # init MPIBase 
+        super(PreCalc, self).__init__(**kwargs)
+
+        self.get_camb_output(**camb_opts)
+
+        # make sure tensor and scalar ks are equal (not guaranteed by CAMB)
+        # because both transfer functions are dealt equally when calculating beta
+        ks = self.depo['scalar']['k']
+        kt = self.depo['tensor']['k']
+
+        np.testing.assert_allclose(ks, kt)        
+
+        # Initialize wigner tables for lmax=8000
+        wig.wig_table_init(2 * 8000, 9)
+        wig.wig_temp_init(2 * 8000)
+        
     def get_camb_output(self, **kwargs):
         '''
         Store CAMB ouput in internal dictionaries.
@@ -192,7 +211,328 @@ class PreCalc(instr.MPIBase):
         path : str
             Path to beta files
         '''
+        pass
 
+    def get_default_bins(self):
+        '''
+        Return bins
+        '''
+
+    def init_bins(self, lmin=None, lmax=None,
+                  bins=None, parity='odd'):
+        '''
+        Create default bins in ell-space. Stores attributes for
+        unique_ells, bins, num_pass and first_pass
+
+        Keyword Arguments
+        -----------------
+        lmin : int
+            Value of first bin
+        lmax : int
+             Create bins up to (but not including lmax)
+        bins : array-like
+            Lower value of bins in ell
+        parity : str
+            Consider tuples in ell that are parity "odd"
+            or "even". If None, use both. (default : "odd")
+
+        Notes
+        -----
+            Sum over ell is l1 <= l2 <= l3
+
+            unique_ells : array-like
+                Values of ell that are used (for alpha, beta)
+            bins : array-like
+                Bin multipoles (same as Meerburg 2016)
+            num_pass : array-like
+                   number of tuples per 3d bin that pass triangle
+                   condition. 
+                   SIGMAi1i2i3 in bucher 2015.
+                   Shape : (nbins, nbins, nbins)
+            first_pass : array-like
+                   Lowest sum tuple per 3d bin that passes triangle
+                   condition. Shape : (nbins, nbins, nbins, 3)
+        '''
+
+        # Determine lmin and lmax
+        lmax_s = self.depo['scalar']['lmax']
+        lmax_t = self.depo['tensor']['lmax']
+
+        lmax_cl = self.depo['cls_lmax']
+
+        lmax_nl = self.depo['nls_lmax']
+        lmin_nl = self.depo['nls_lmin']
+
+        # store parity
+        self.depo['parity'] = parity
+
+        self.lmax = lmax
+        self.lmin = lmin
+
+        if lmax < lmin:
+            raise ValueError('lmax < lmin')
+
+        # bins used in Meerburg 2016
+        bins_0 = np.arange(lmin, 101, 1)
+#        bins_0 = np.arange(lmin, 151, 1)
+        bins_1 = np.arange(110, 510, 10)
+#        bins_1 = np.arange(160, 510, 10)
+        bins_2 = np.arange(520, 2020, 20)
+        bins_3 = np.arange(2030, 8000, 30)
+        bins = np.concatenate((bins_0, bins_1, bins_2, bins_3))
+
+        max_bin = np.argmax(bins>lmax)
+        bins = bins[:max_bin]
+
+        num_bins = bins.size
+        # allocate space for number of good tuples per 3d bin
+        num_pass = np.zeros((num_bins, num_bins, num_bins), dtype=int)
+        # allocate space for first good tuple per 3d bin
+        first_pass = np.zeros((num_bins, num_bins, num_bins, 3), dtype=int)
+
+        if parity == 'odd':
+            pmod = 1
+        elif parity == 'even':
+            pmod = 0
+        else:
+            pmod = None
+
+        # calculate bins in parallel, split ell in outer loop
+        ells = np.arange(lmin, lmax+1)
+        self.ells = ells
+        ells_sub = ells[self.mpi_rank::self.mpi_size]
+
+        # create an ell -> bin idx lookup table for 2nd loop
+        idx = np.digitize(ells, bins, right=False) - 1
+
+        # boolean index array for inner loop
+        ba = np.ones(ells.size, dtype=bool)
+
+        for ell1 in ells_sub:
+#            print 'rank: {}, ell: {}'.format(self.mpi_rank, ell1)
+            # which bin?
+            idx1 = np.argmax(ell1 < bins) - 1
+
+            for ell2 in xrange(ell1, lmax+1):
+
+                # which bin?
+                idx2 = idx[ell2 - lmin]
+
+                # exclude ells below ell2
+                ba[:ell2-lmin+1] = False
+
+                # exclude parity odd/even
+                if parity:
+                    if (ell1 + ell2) % 2:
+                        # sum is odd, l3 must be even if parity=odd
+                        ba[ells%2 == pmod] *= False
+                    else:
+                        # sum is even, l3 must be odd if parity=odd
+                        ba[~(ells%2 == pmod)] *= False
+
+                # exclude triangle
+                ba[(abs(ell1 - ell2) > ells) | (ells > (ell1 + ell2))] *= False
+
+                # use boolean index array to determine good ell3s
+                gd_ells = ells[ba]
+
+                # find number of good ells within bin
+                bin_idx = idx[ba] # for each good ell, index of corr. bin
+                # find position in bin_idx of first unique index
+                u_idx, first_idx, count = np.unique(bin_idx, return_index=True,
+                                          return_counts=True)
+
+                num_pass[idx1,idx2,u_idx] = count
+                # first pass needs a (u_idx.size, 3) array
+                first_pass[idx1,idx2,u_idx,0] = ell1
+                first_pass[idx1,idx2,u_idx,1] = ell2
+                first_pass[idx1,idx2,u_idx,2] = gd_ells[first_idx]
+
+                # reset array
+                ba[:] = True
+
+        # now combine num_pass and first_pass on root
+        if self.mpi:
+            self.barrier()
+
+            # allocate space to receive arrays on root
+            if self.mpi_rank == 0:
+                num_pass_rec = np.zeros_like(num_pass)
+                first_pass_rec = np.zeros_like(first_pass)
+
+            # loop over all non-root ranks
+            for rank in xrange(1, self.mpi_size):
+
+                # send arrays to root
+                if self.mpi_rank == rank:
+                    self._comm.Send(num_pass, dest=0, tag=rank)
+                    self._comm.Send(first_pass, dest=0, tag=rank + self.mpi_size)
+
+                if self.mpi_rank == 0:
+                    self._comm.Recv(num_pass_rec, source=rank, tag=rank)
+                    self._comm.Recv(first_pass_rec, source=rank, tag=rank + self.mpi_size)
+
+                    # simply add num_pass but only take first pass if lower
+                    num_pass += num_pass_rec
+
+                    sum_root = np.sum(first_pass, axis=3)
+                    sum_rec = np.sum(first_pass_rec, axis=3)
+
+                    mask = sum_root == 0
+                    first_pass[mask,:] = first_pass_rec[mask,:]
+
+                    mask2 = sum_rec < sum_root
+                    # but rec is not zero
+                    mask2 *= sum_rec != 0
+                    first_pass[mask2,:] = first_pass_rec[mask2,:]
+
+            # broadcast full arrays to all ranks
+            num_pass = self.broadcast_array(num_pass)
+            first_pass = self.broadcast_array(first_pass)
+
+        self.barrier()
+
+        # trim away the zeros in first_pass
+        self.unique_ells = np.unique(first_pass)[1:]
+        self.bins = bins
+        self.num_pass = num_pass
+        self.first_pass = first_pass
+
+        self.depo['init_bins'] = True
+
+    def get_binned_invcov(self, bins=None):
+        '''
+        Combine singnal and noise into an inverse cov matrix
+        per bin. We first bin, then compute inverse.
+
+        Notes
+        -----
+        Stores shape = (ells, 3, 3) array. ells is unbinned.
+        '''
+
+        ells = self.ells
+
+        if bins is None:
+            bins = self.bins        
+
+        indices = np.digitize(ells, bins, right=False) - 1
+
+        cls = self.depo['cls'] # Signal, lmin = 2
+        nls = self.depo['nls'] # Noise
+
+        lmin = ells[0]
+        lmax = ells[-1]
+
+        # assume nls start at lmin, cls at ell=2
+        nls = nls[:,:(lmax - lmin + 1)]
+        cls = cls[:,lmin-2:lmax-1]
+
+        # Add signal cov to noise (cls for TB and TE not present in cls)
+        nls[:4,:] += cls
+
+        bin_cov = np.ones((bins.size, 3, 3))
+        bin_cov *= np.nan
+        bin_invcov = bin_cov.copy()
+
+        nls_dict = {'TT': 0, 'EE': 1, 'BB': 2, 'TE': 3,
+                    'ET': 3, 'BT': 4, 'TB': 4, 'EB': 5,
+                    'BE': 5}
+
+        for pidx1, pol1 in enumerate(['T', 'E', 'B']):
+            for pidx2, pol2 in enumerate(['T', 'E', 'B']):
+
+                # Cl+Nl array
+                nidx = nls_dict[pol1+pol2]
+                nell = nls[nidx,:]
+
+                # Bin
+                bin_cov[:-1,pidx1,pidx2], _, _ = binned_statistic(ells, nell,
+                                                             statistic='mean',
+                                                             bins=bins)
+
+        # Invert
+        for bidx in xrange(bins.size - 1):
+            bin_invcov[bidx,:] = inv(bin_cov[bidx,:])
+
+        # Expand binned inverse cov and cov to full size again
+        invcov = np.ones((ells.size, 3, 3))
+        invcov *= np.nan
+        cov = invcov.copy()
+        invcov[:] = bin_invcov[indices,:]
+        cov[:] = bin_cov[indices,:]
+
+        self.invcov = invcov
+        self.cov = cov
+        self.bin_cov = bin_cov
+        self.bin_invcov = bin_invcov
+        self.nls = nls
+
+    def init_wig3j(self):
+        '''
+        Precompute I^000_lL1 and I^20-2_lL2 for all unique ells
+        and \Delta L \in [-2, -1, 0, 1, 2]
+
+        Store internally as wig_s and wig_t arrays with shape:
+        (ells.size, (\Delta L = 5)). So full ell array, although
+        only the unique ells are calculated.
+        '''
+
+        u_ells = self.unique_ells
+        ells = self.ells
+
+        lmin = ells[0]
+
+        wig_s = np.zeros((ells.size, 5))
+        wig_t = np.zeros((ells.size, 5))
+
+        for ell in u_ells:
+            # ell is full-sized, so we can simply infer the indices
+            lidx = ell - lmin
+
+            for Lidx, DL in enumerate([-2, -1, 0, 1, 2]):
+
+                L = ell + DL
+                if DL == -1 or DL == 1:
+                    # only here we need to fill the scalar factor
+                    tmp = wig.wig3jj([2*ell, 2*L, 2,
+                                      0, 0, 0])
+                    tmp *= np.sqrt((2 * L + 1) * (2 * ell + 1) * 3)
+                    tmp /= (2 * np.sqrt(np.pi))
+                    wig_s[lidx,Lidx] = tmp
+
+                tmp = wig.wig3jj([2*ell, 2*L, 4,
+                                  4, 0, -4])
+                tmp *= np.sqrt((2 * L + 1) * (2 * ell + 1) * 5)
+                tmp /= (2 * np.sqrt(np.pi))
+
+                wig_t[lidx,Lidx] = tmp
+
+        self.wig_s = wig_s
+        self.wig_t = wig_t
+
+    def init_pol_triplets(self):
+        '''
+        Store polarization triples internally
+
+        I = 0, E = 1, B = 2
+        '''
+
+        pol_trpl = np.zeros((12, 3), dtype=int)
+
+        pol_trpl[0] = 0, 0, 2
+        pol_trpl[1] = 0, 2, 0
+        pol_trpl[2] = 2, 0, 0
+        pol_trpl[3] = 1, 0, 2
+        pol_trpl[4] = 1, 2, 0
+        pol_trpl[5] = 2, 1, 0
+        pol_trpl[6] = 0, 1, 2
+        pol_trpl[7] = 0, 2, 1
+        pol_trpl[8] = 2, 0, 1
+        pol_trpl[9] = 1, 1, 2
+        pol_trpl[10] = 1, 2, 1
+        pol_trpl[11] = 2, 1, 1
+
+        self.pol_trpl = pol_trpl
 
     def beta(self, f=None, L_range=[-2, -1, 0, 1, 2], radii=None, bin=True,
              optimize=True):
@@ -486,7 +826,7 @@ class PreCalc(instr.MPIBase):
 
         return
 
-class Bispectrum(PreCalc):
+class Template(PreCalc):
     '''
     Create arrays of shape (nfact, 3, k.size)
     '''
@@ -519,14 +859,11 @@ class Bispectrum(PreCalc):
 
         self.common_amp = (2*np.pi)**3 * 16 * np.pi**4 * self.scalar_amp**2
 
+        super(Template, self).__init__(**kwargs)
+
         # make sure tensor and scalar ks are equal (not guaranteed by CAMB)
-        ks = self.depo['scalar']['k']
-        kt = self.depo['tensor']['k']
-
-        np.testing.assert_allclose(ks, kt)
-        
-        super(Bispectrum, self).__init__(**kwargs)
-
+#        ks = self.depo['scalar']['k']
+#        kt = self.depo['tensor']['k']
 
     def local(self, fnl=1):
         '''
@@ -591,7 +928,7 @@ class Bispectrum(PreCalc):
         
         return template, amp
 
-class Fisher(Bispectrum):
+class Fisher(Template):
 
     def __init__(self, **kwargs):
         '''
@@ -599,338 +936,18 @@ class Fisher(Bispectrum):
         '''
 
         # Extract kwargs for loading CAMB output, such that
-        # they do not get passed to Bispectrum class
-        tag = kwargs.pop('tag')
-        lensed = kwargs.pop('lensed')
-        camb_opts = dict(tag=tag, lensed=lensed)
+        # they do not get passed to Template class
+#        tag = kwargs.pop('tag')
+#        lensed = kwargs.pop('lensed')
+#        camb_opts = dict(tag=tag, lensed=lensed)
 
         super(Fisher, self).__init__(**kwargs)
 
-        self.get_camb_output(**camb_opts)
+#        self.get_camb_output(**camb_opts)
 
         # Initialize wigner tables for lmax=8000
-        wig.wig_table_init(2 * 8000, 9)
-        wig.wig_temp_init(2 * 8000)
-
-
-    def get_default_bins(self):
-        '''
-        Return bins
-        '''
-
-    def init_bins(self, lmin=None, lmax=None,
-                  bins=None, parity='odd'):
-        '''
-        Create default bins in ell-space. Stores attributes for
-        unique_ells, bins, num_pass and first_pass
-
-        Keyword Arguments
-        -----------------
-        lmin : int
-            Value of first bin
-        lmax : int
-             Create bins up to (but not including lmax)
-        bins : array-like
-            Lower value of bins in ell
-        parity : str
-            Consider tuples in ell that are parity "odd"
-            or "even". If None, use both. (default : "odd")
-
-        Notes
-        -----
-            Sum over ell is l1 <= l2 <= l3
-
-            unique_ells : array-like
-                Values of ell that are used (for alpha, beta)
-            bins : array-like
-                Bin multipoles (same as Meerburg 2016)
-            num_pass : array-like
-                   number of tuples per 3d bin that pass triangle
-                   condition. No parity check right now.
-                   SIGMAi1i2i3 in bucher 2015.
-                   Shape : (nbins, nbins, nbins)
-            first_pass : array-like
-                   Lowest sum tuple per 3d bin that passes triangle
-                   condition. Shape : (nbins, nbins, nbins, 3)
-        '''
-
-        # Determine lmin and lmax
-        lmax_s = self.depo['scalar']['lmax']
-        lmax_t = self.depo['tensor']['lmax']
-
-        lmax_cl = self.depo['cls_lmax']
-
-        lmax_nl = self.depo['nls_lmax']
-        lmin_nl = self.depo['nls_lmin']
-
-        # store parity
-        self.depo['parity'] = parity
-
-        self.lmax = lmax
-        self.lmin = lmin
-
-        if lmax < lmin:
-            raise ValueError('lmax < lmin')
-
-        # bins used in Meerburg 2016
-        bins_0 = np.arange(lmin, 101, 1)
-#        bins_0 = np.arange(lmin, 151, 1)
-        bins_1 = np.arange(110, 510, 10)
-#        bins_1 = np.arange(160, 510, 10)
-        bins_2 = np.arange(520, 2020, 20)
-        bins_3 = np.arange(2030, 8000, 30)
-        bins = np.concatenate((bins_0, bins_1, bins_2, bins_3))
-
-        max_bin = np.argmax(bins>lmax)
-        bins = bins[:max_bin]
-
-        num_bins = bins.size
-        # allocate space for number of good tuples per 3d bin
-        num_pass = np.zeros((num_bins, num_bins, num_bins), dtype=int)
-        # allocate space for first good tuple per 3d bin
-        first_pass = np.zeros((num_bins, num_bins, num_bins, 3), dtype=int)
-
-        if parity == 'odd':
-            pmod = 1
-        elif parity == 'even':
-            pmod = 0
-        else:
-            pmod = None
-
-        # calculate bins in parallel, split ell in outer loop
-        ells = np.arange(lmin, lmax+1)
-        self.ells = ells
-        ells_sub = ells[self.mpi_rank::self.mpi_size]
-
-        # create an ell -> bin idx lookup table for 2nd loop
-        idx = np.digitize(ells, bins, right=False) - 1
-
-        # boolean index array for inner loop
-        ba = np.ones(ells.size, dtype=bool)
-
-        for ell1 in ells_sub:
-#            print 'rank: {}, ell: {}'.format(self.mpi_rank, ell1)
-            # which bin?
-            idx1 = np.argmax(ell1 < bins) - 1
-
-            for ell2 in xrange(ell1, lmax+1):
-
-                # which bin?
-                idx2 = idx[ell2 - lmin]
-
-                # exclude ells below ell2
-                ba[:ell2-lmin+1] = False
-
-                # exclude parity odd/even
-                if parity:
-                    if (ell1 + ell2) % 2:
-                        # sum is odd, l3 must be even if parity=odd
-                        ba[ells%2 == pmod] *= False
-                    else:
-                        # sum is even, l3 must be odd if parity=odd
-                        ba[~(ells%2 == pmod)] *= False
-
-                # exclude triangle
-                ba[(abs(ell1 - ell2) > ells) | (ells > (ell1 + ell2))] *= False
-
-                # use boolean index array to determine good ell3s
-                gd_ells = ells[ba]
-
-                # find number of good ells within bin
-                bin_idx = idx[ba] # for each good ell, index of corr. bin
-                # find position in bin_idx of first unique index
-                u_idx, first_idx, count = np.unique(bin_idx, return_index=True,
-                                          return_counts=True)
-
-                num_pass[idx1,idx2,u_idx] = count
-                # first pass needs a (u_idx.size, 3) array
-                first_pass[idx1,idx2,u_idx,0] = ell1
-                first_pass[idx1,idx2,u_idx,1] = ell2
-                first_pass[idx1,idx2,u_idx,2] = gd_ells[first_idx]
-
-                # reset array
-                ba[:] = True
-
-        # now combine num_pass and first_pass on root
-        if self.mpi:
-            self.barrier()
-
-            # allocate space to receive arrays on root
-            if self.mpi_rank == 0:
-                num_pass_rec = np.zeros_like(num_pass)
-                first_pass_rec = np.zeros_like(first_pass)
-
-            # loop over all non-root ranks
-            for rank in xrange(1, self.mpi_size):
-
-                # send arrays to root
-                if self.mpi_rank == rank:
-                    self._comm.Send(num_pass, dest=0, tag=rank)
-                    self._comm.Send(first_pass, dest=0, tag=rank + self.mpi_size)
-
-                if self.mpi_rank == 0:
-                    self._comm.Recv(num_pass_rec, source=rank, tag=rank)
-                    self._comm.Recv(first_pass_rec, source=rank, tag=rank + self.mpi_size)
-
-                    # simply add num_pass but only take first pass if lower
-                    num_pass += num_pass_rec
-
-                    sum_root = np.sum(first_pass, axis=3)
-                    sum_rec = np.sum(first_pass_rec, axis=3)
-
-                    mask = sum_root == 0
-                    first_pass[mask,:] = first_pass_rec[mask,:]
-
-                    mask2 = sum_rec < sum_root
-                    # but rec is not zero
-                    mask2 *= sum_rec != 0
-                    first_pass[mask2,:] = first_pass_rec[mask2,:]
-
-            # broadcast full arrays to all ranks
-            num_pass = self.broadcast_array(num_pass)
-            first_pass = self.broadcast_array(first_pass)
-
-        self.barrier()
-
-        # trim away the zeros in first_pass
-        self.unique_ells = np.unique(first_pass)[1:]
-        self.bins = bins
-        self.num_pass = num_pass
-        self.first_pass = first_pass
-
-        self.depo['init_bins'] = True
-
-    def get_binned_invcov(self):
-        '''
-        Combine singnal and noise into an inverse cov matrix
-        per bin. We first bin, then compute inverse.
-
-        Notes
-        -----
-        Stores shape = (ells, 3, 3) array. ells is unbinned.
-        '''
-
-        ells = self.ells
-        indices = np.digitize(ells, self.bins, right=False) - 1
-
-        cls = self.depo['cls'] # Signal, lmin = 2
-        nls = self.depo['nls'] # Noise
-
-        lmin = ells[0]
-        lmax = ells[-1]
-
-        # assume nls start at lmin, cls at ell=2
-        nls = nls[:,:(lmax - lmin + 1)]
-        cls = cls[:,lmin-2:lmax-1]
-
-        # Add signal cov to noise (cls for TB and TE not present in cls)
-        nls[:4,:] += cls
-
-        bins = self.bins
-
-        bin_cov = np.ones((bins.size, 3, 3))
-        bin_cov *= np.nan
-        bin_invcov = bin_cov.copy()
-
-        nls_dict = {'TT': 0, 'EE': 1, 'BB': 2, 'TE': 3,
-                    'ET': 3, 'BT': 4, 'TB': 4, 'EB': 5,
-                    'BE': 5}
-
-        for pidx1, pol1 in enumerate(['T', 'E', 'B']):
-            for pidx2, pol2 in enumerate(['T', 'E', 'B']):
-
-                # Cl+Nl array
-                nidx = nls_dict[pol1+pol2]
-                nell = nls[nidx,:]
-
-                # Bin
-                bin_cov[:-1,pidx1,pidx2], _, _ = binned_statistic(ells, nell,
-                                                             statistic='mean',
-                                                             bins=bins)
-
-        # Invert
-        for bidx in xrange(bins.size - 1):
-            bin_invcov[bidx,:] = inv(bin_cov[bidx,:])
-
-        # Expand binned inverse cov and cov to full size again
-        invcov = np.ones((ells.size, 3, 3))
-        invcov *= np.nan
-        cov = invcov.copy()
-        invcov[:] = bin_invcov[indices,:]
-        cov[:] = bin_cov[indices,:]
-
-        self.invcov = invcov
-        self.cov = cov
-        self.bin_cov = bin_cov
-        self.ells = ells
-        self.nls = nls
-
-    def init_wig3j(self):
-        '''
-        Precompute I^000_lL1 and I^20-2_lL2 for all unique ells
-        and \Delta L \in [-2, -1, 0, 1, 2]
-
-        Store internally as wig_s and wig_t arrays with shape:
-        (ells.size, (\Delta L = 5)). So full ell array, although
-        only the unique ells are calculated.
-        '''
-
-        u_ells = self.unique_ells
-        ells = self.ells
-
-        lmin = ells[0]
-
-        wig_s = np.zeros((ells.size, 5))
-        wig_t = np.zeros((ells.size, 5))
-
-        for ell in u_ells:
-            # ell is full-sized, so we can simply infer the indices
-            lidx = ell - lmin
-
-            for Lidx, DL in enumerate([-2, -1, 0, 1, 2]):
-
-                L = ell + DL
-                if DL == -1 or DL == 1:
-                    # only here we need to fill the scalar factor
-                    tmp = wig.wig3jj([2*ell, 2*L, 2,
-                                      0, 0, 0])
-                    tmp *= np.sqrt((2 * L + 1) * (2 * ell + 1) * 3)
-                    tmp /= (2 * np.sqrt(np.pi))
-                    wig_s[lidx,Lidx] = tmp
-
-                tmp = wig.wig3jj([2*ell, 2*L, 4,
-                                  4, 0, -4])
-                tmp *= np.sqrt((2 * L + 1) * (2 * ell + 1) * 5)
-                tmp /= (2 * np.sqrt(np.pi))
-
-                wig_t[lidx,Lidx] = tmp
-
-        self.wig_s = wig_s
-        self.wig_t = wig_t
-
-    def init_pol_triplets(self):
-        '''
-        Store polarization triples internally
-
-        I = 0, E = 1, B = 2
-        '''
-
-        pol_trpl = np.zeros((12, 3), dtype=int)
-
-        pol_trpl[0] = 0, 0, 2
-        pol_trpl[1] = 0, 2, 0
-        pol_trpl[2] = 2, 0, 0
-        pol_trpl[3] = 1, 0, 2
-        pol_trpl[4] = 1, 2, 0
-        pol_trpl[5] = 2, 1, 0
-        pol_trpl[6] = 0, 1, 2
-        pol_trpl[7] = 0, 2, 1
-        pol_trpl[8] = 2, 0, 1
-        pol_trpl[9] = 1, 1, 2
-        pol_trpl[10] = 1, 2, 1
-        pol_trpl[11] = 2, 1, 1
-
-        self.pol_trpl = pol_trpl
+#        wig.wig_table_init(2 * 8000, 9)
+#        wig.wig_temp_init(2 * 8000)
 
     def binned_bispectrum(self, DL1, DL2, DL3):
         '''
@@ -1184,12 +1201,13 @@ class Fisher(Bispectrum):
                         bispec *= num 
 
                         # divide by Delta_i1i2i3, note bins, not ells
-                        if i1 == i2 == i3:
-                            bispec /= 6.
-                        elif i1 != i2 != i3:
-                            pass
-                        else:
-                            bispec /= 2.
+                        # You should do this in Fisher loop, not in B
+#                        if i1 == i2 == i3:
+#                            bispec /= 6.
+#                        elif i1 != i2 != i3:
+#                            pass
+#                        else:
+#                            bispec /= 2.
                         
                         bispectrum[idxb,idx2,idx3,pidx] = bispec                                    
             
