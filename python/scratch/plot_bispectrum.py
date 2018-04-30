@@ -17,9 +17,11 @@ import fisher
 opj = os.path.join
 ana_dir = '/mn/stornext/d8/ITA/spider/adri/analysis/20171217_sst/'
 
-test_dir = opj(ana_dir, 'bispectrum/test')
+#test_dir = opj(ana_dir, 'bispectrum/test')
+test_dir = opj(ana_dir, 'bispectrum/run_pico')
 
-B = np.load(opj(test_dir, 'test.npy'))
+#B = np.load(opj(test_dir, 'test.npy'))
+B = np.load(opj(test_dir, 'bispectrum.npy'))
 num_pass = np.load(opj(test_dir, 'num_pass.npy'))
 num_pass = num_pass[:-1,:-1,:-1]
 
@@ -32,7 +34,7 @@ bins = bins[:-1] # last bin is not saved in B anymore
 #beta_t = np.load(opj(test_dir, 'beta_t.npy'))
 pol_trpl = np.load(opj(test_dir, 'pol_trpl.npy'))
 
-idx = 70
+idx = 150
 lmin = bins[idx]
 lmax = bins[-1]
 
@@ -69,7 +71,7 @@ for pidx, pol in enumerate(pol_trpl):
     B_slice *= (b1 * b2)**2
 
     # make B antisymmetric
-#    B_slice += -B_slice.T  #NOTENOTE
+    B_slice += -B_slice.T  
     
     B_slice_r = B_slice.copy()
     B_slice_r[B_slice_r == 0] = np.nan
@@ -116,10 +118,15 @@ fig_r.tight_layout()
 fig_s.tight_layout()
 fig_d.tight_layout()
 
-fig.savefig(opj(ana_dir, 'bispectrum/test', 'griddata.png'))
-fig_r.savefig(opj(ana_dir, 'bispectrum/test', 'griddata_raw.png'))
-fig_s.savefig(opj(ana_dir, 'bispectrum/test', 'griddata_raw_scatter.png'))
-fig_d.savefig(opj(ana_dir, 'bispectrum/test', 'griddata_1d.png'))
+#fig.savefig(opj(ana_dir, 'bispectrum/test', 'griddata.png'))
+#fig_r.savefig(opj(ana_dir, 'bispectrum/test', 'griddata_raw.png'))
+#fig_s.savefig(opj(ana_dir, 'bispectrum/test', 'griddata_raw_scatter.png'))
+#fig_d.savefig(opj(ana_dir, 'bispectrum/test', 'griddata_1d.png'))
+fig.savefig(opj(test_dir, 'griddata.png'))
+fig_r.savefig(opj(test_dir, 'griddata_raw.png'))
+fig_s.savefig(opj(test_dir, 'griddata_raw_scatter.png'))
+fig_d.savefig(opj(test_dir, 'griddata_1d.png'))
+
 plt.close(fig)
 plt.close(fig_r)
 plt.close(fig_s)

@@ -632,8 +632,9 @@ class Fisher(Bispectrum):
 #        bins_0 = np.arange(lmin, 151, 1)
         bins_1 = np.arange(110, 510, 10)
 #        bins_1 = np.arange(160, 510, 10)
-        bins_2 = np.arange(520, 8000, 20)
-        bins = np.concatenate((bins_0, bins_1, bins_2))
+        bins_2 = np.arange(520, 2020, 20)
+        bins_3 = np.arange(2030, 8000, 30)
+        bins = np.concatenate((bins_0, bins_1, bins_2, bins_3))
 
         max_bin = np.argmax(bins>lmax)
         bins = bins[:max_bin]
