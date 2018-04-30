@@ -33,6 +33,8 @@ class PreCalc(instr.MPIBase):
         self.camb_dir = camb_dir
         self.depo = {}
 
+        self.depo['init_bins'] = False
+
         super(PreCalc, self).__init__()
 
     def get_camb_output(self, **kwargs):
@@ -484,24 +486,47 @@ class PreCalc(instr.MPIBase):
 
         return
 
-
-
-
 class Bispectrum(PreCalc):
     '''
     Create arrays of shape (nfact, 3, k.size)
     '''
 
-    def __init__(self, **kwargs):
+    def __init__(self, template='local', **kwargs):
+        '''
+        
+        Notes
+        -----
+        <h zeta zeta > = (2pi)^3 f(k1, k2, k3) delta(k1 + k2 + k3)
+        * e(\hat(k1)) \hat(k2) \hat(k3),
+        where f = 16 pi^4 As^2 fnl * S
 
+        S (shape) is for (see Planck XVII):
+        local: S = 2(1/(k1k2)^3 + cycl.),
+        equil: S = 6(-1/(k1k2)^3 - cycl.  - 2/(k1k2k3)^2 + 1/(k1k2k3^3) )
+        ortho: S = 6(-3/(k1k2)^3 - cycl.  - 8/(k1k2k3)^2 + 1/(k1k2k3^3) )
+
+        so for local we only need alpha and beta
+        for equilateral and orthgonal we need 
+        alpha, beta, gamma, delta (see creminelli 2005)
+        '''
+        
+        # TODO: add attribute that tells you which template is used
+        # load up template based on choice in init
+        
+        # You don't have to get primordial parameters from CAMB
+        # transfer functions don't depend on them        
         self.scalar_amp = 2.1e-9
-        self.ns = 0.96
-        self.nt = 0
-        self.r = 0.03
 
+        self.common_amp = (2*np.pi)**3 * 16 * np.pi**4 * self.scalar_amp**2
+
+        # make sure tensor and scalar ks are equal (not guaranteed by CAMB)
+        ks = self.depo['scalar']['k']
+        kt = self.depo['tensor']['k']
+
+        np.testing.assert_allclose(ks, kt)
+        
         super(Bispectrum, self).__init__(**kwargs)
 
-        self.depo['init_bins'] = False
 
     def local(self, fnl=1):
         '''
@@ -511,50 +536,70 @@ class Bispectrum(PreCalc):
         Returns
         -------
         template : array-like
-            shape (2, k.size) used for beta, alpha
-            for beta we simply have k^-3, for alpha
+            shape (2, k.size) used for beta (0), alpha (1).
+            For beta we simply have k^-3, for alpha
             just an array of ones.
         amp : float
-            Amplitude of local primordial <>
-            Following Meerburg we set:
-            <>
+            scalar amplitude of bispectrum with local
+            shape: = 2 * fnl
 
         Notes
         -----
-        <h zeta zeta > = (2pi)^3 f(k1, k2, k3) delta()
+        
 
         '''
 
-        amp = (2 * np.pi)**3 * 16 * np.pi**4 * self.scalar_amp * np.sqrt(self.r)
-        amp *= fnl
-
         ks = self.depo['scalar']['k']
-        kt = self.depo['tensor']['k']
 
         km3 = ks**-3
         ones = np.ones(ks.size)
 
-        km3 *= amp
         template = np.asarray([km3, ones])
+        amp = 2. * fnl
 
-        return template
+        return template, amp
 
     def equilateral(self, fnl=1):
         '''
 
         '''
+        ks = self.depo['scalar']['k']
 
-        pass
+        km3 = ks**-3
+        km2 = ks**-2
+        km1 = ks**-1
+        ones = np.ones(ks.size)
+
+        template = np.asarray([km3, km2, km1, ones])
+        amp = 6. * fnl
+        
+        return template, amp
 
     def orthogonal(self, fnl=1):
         '''
-
+        Note, same as equil?
         '''
-        pass
+        ks = self.depo['scalar']['k']
+
+        km3 = ks**-3
+        km2 = ks**-2
+        km1 = ks**-1
+        ones = np.ones(ks.size)
+
+        template = np.asarray([km3, km2, km1, ones])
+        amp = 6. * fnl
+        
+        return template, amp
 
 class Fisher(Bispectrum):
 
     def __init__(self, **kwargs):
+        '''
+
+        '''
+
+        # Extract kwargs for loading CAMB output, such that
+        # they do not get passed to Bispectrum class
         tag = kwargs.pop('tag')
         lensed = kwargs.pop('lensed')
         camb_opts = dict(tag=tag, lensed=lensed)
