@@ -19,53 +19,56 @@ opj = os.path.join
 
 class PreCalc(instr.MPIBase):
 
-    def __init__(self, camb_dir='.', **kwargs):
+    def __init__(self, **kwargs):
         '''
 
         Keyword arguments
         -----------------
-        camb_dir : str
-            Path to directory containing camb output
-            (Cls, transfers and aux) (default : ".")
+        kwargs : {MPIBase_opts}
         '''
 
-        self.camb_dir = camb_dir
+#        self.camb_dir = camb_dir
+
+        # TODO what goes in the depo and what does not?
         self.depo = {}
 
         self.depo['init_bins'] = False
 
         # Extract kwargs for loading CAMB output, such that
         # they do not get passed to MPIBase
-        tag = kwargs.pop('tag', None)
-        lensed = kwargs.pop('lensed', None)
-        camb_opts = dict(tag=tag, lensed=lensed)
+#        tag = kwargs.pop('tag', None)
+#        lensed = kwargs.pop('lensed', None)
+#        camb_opts = dict(tag=tag, lensed=lensed)
 
         # init MPIBase 
         super(PreCalc, self).__init__(**kwargs)
 
-        self.get_camb_output(**camb_opts)
-
-        # make sure tensor and scalar ks are equal 
-        # (not guaranteed by CAMB)
-        # because both transfer functions are dealt with
-        # equally when calculating beta
-        ks = self.depo['scalar']['k']
-        kt = self.depo['tensor']['k']
-
-        np.testing.assert_allclose(ks, kt)        
+#        self.get_camb_output(**camb_opts)
 
         # Initialize wigner tables for lmax=8000
         wig.wig_table_init(2 * 8000, 9)
         wig.wig_temp_init(2 * 8000)
         
-    def get_camb_output(self, **kwargs):
+    def get_camb_output(self, camb_out_dir, **kwargs):
         '''
-        Store CAMB ouput in internal dictionaries.
-        Loaded by root process and broadcasted to other ranks
+        Store CAMB ouput (transfer functions and Cls) and store
+        in internal dictionaries. 
 
+        Arguments
+        ---------
+        camb_out_dir : str
+            Path to folder containing CAMB output
+
+        Keyword Arguments
+        -----------------
         kwargs : {get_spectra_opts}
+
+        Notes
+        -----
+        Transfer functions and Cls are not independent,
+        so makes sense to load them together like this.
         '''
-        source_dir = self.camb_dir
+        source_dir = camb_out_dir
 
         lmax = None
         cls = None
@@ -78,17 +81,17 @@ class PreCalc(instr.MPIBase):
             cls, lmax = ct.get_spectra(source_dir, **kwargs)
 
         cls = self.broadcast_array(cls)
-
         lmax = self.broadcast(lmax)
 
         self.depo['cls'] = cls
         self.depo['cls_lmax'] = lmax
 
-        # load transfer functions and aux
+        # load transfer functions, k-arrays and lmax
         for ttype in ['scalar', 'tensor']:
 
             if self.mpi_rank == 0:
-                tr, lmax, k = ct.read_camb_output(source_dir, ttype=ttype)
+                tr, lmax, k = ct.read_camb_output(source_dir,
+                                                  ttype=ttype)
 
             tr = self.broadcast_array(tr)
             k = self.broadcast_array(k)
@@ -97,6 +100,15 @@ class PreCalc(instr.MPIBase):
             self.depo[ttype] = {'transfer' : tr,
                                 'lmax' : lmax,
                                 'k' : k}
+
+        # make sure tensor and scalar ks are equal (not 
+        # guaranteed by CAMB). Needed b/c both T and S 
+        # transfer functions are integrated over same k
+        # when calculating beta
+        ks = self.depo['scalar']['k']
+        kt = self.depo['tensor']['k']
+
+        np.testing.assert_allclose(ks, kt)        
 
     def get_noise_curves(self, cross_noise=False, **kwargs):
         '''
@@ -170,7 +182,6 @@ class PreCalc(instr.MPIBase):
         self.depo['nls_lmin'] = int(lmin)
         self.depo['nls_lmax'] = int(lmax)
 
-
     def get_default_radii(self):
         '''
         Get the radii (in Mpc) used in table 1 of liquori 2007
@@ -188,7 +199,7 @@ class PreCalc(instr.MPIBase):
 
     def get_updated_radii(self):
         '''
-        Get the radii (in Mpc) that are more suitable to post-planck lcdm
+        Get the radii (in Mpc) that are more suitable to post-Planck LCDM
         '''
 
         low = np.linspace(0, 9377, num=98, dtype=float, endpoint=False)
@@ -235,7 +246,8 @@ class PreCalc(instr.MPIBase):
         return bins
         
     def init_bins(self, lmin=None, lmax=None,
-                  bins=None, parity='odd'):
+                  bins=None, parity='odd',
+                  verbose=False):
         '''
         Create default bins in ell-space. Stores attributes for
         unique_ells, bins, num_pass and first_pass
@@ -256,27 +268,27 @@ class PreCalc(instr.MPIBase):
 
         Notes
         -----
-            Sum over ell is l1 <= l2 <= l3
+        Sum over ell is l1 <= l2 <= l3
 
-            Stores following internal attributes
-            
-            lmin : int
-            lmax : int
-            ells : array-like
-                Unbinned ell values from lmin to lmax
-            bins : array-like
-                Left (lower) side of bins used in rest of code
-            num_pass : array-like
-                number of tuples per 3d bin that pass triangle
-                condition. 
-                SIGMAi1i2i3 in bucher 2015.
-                Shape : (nbins, nbins, nbins).
-            first_pass : array-like
-                Lowest sum tuple per 3d bin that passes triangle
-                condition. Shape : (nbins, nbins, nbins, 3).
-            unique_ells : array-like
-                Values of ell that appear in first_pass. Used to only
-                precompute Wigner 3j's for values that are used.
+        Stores following internal attributes
+
+        lmin : int
+        lmax : int
+        ells : array-like
+            Unbinned ell values from lmin to lmax
+        bins : array-like
+            Left (lower) side of bins used in rest of code
+        num_pass : array-like
+            number of tuples per 3d bin that pass triangle
+            condition. 
+            SIGMAi1i2i3 in bucher 2015.
+            Shape : (nbins, nbins, nbins).
+        first_pass : array-like
+            Lowest sum tuple per 3d bin that passes triangle
+            condition. Shape : (nbins, nbins, nbins, 3).
+        unique_ells : array-like
+            Values of ell that appear in first_pass. Used to only
+            precompute Wigner 3j's for values that are used.
         '''
 
         # Determine lmin and lmax
@@ -293,6 +305,7 @@ class PreCalc(instr.MPIBase):
 
         # If needed, extract lmin, lmax from provided bins
         if bins:
+            bins = np.array(bins)
             if not lmin:
                 lmin = bins[0]
             if not lmax:
@@ -301,27 +314,32 @@ class PreCalc(instr.MPIBase):
         elif not (lmin and lmax):
             raise ValueError('Provide lmin and lmax if bins=None')
 
-        if lmax < lmin:
-            raise ValueError('lmax < lmin')
+        if lmax <= lmin:
+            raise ValueError('lmax <= lmin')
 
         self.lmax = lmax
         self.lmin = lmin
         ells = np.arange(lmin, lmax+1)
         self.ells = ells
 
-        if not bins:
+        if bins is None:
             bins = self.get_default_bins()
 
         # Truncate bins
         try:
             # find first occurences
             min_bidx = np.where(bins >= lmin)[0][0]
-            max_bidx = np.where(bins >= lmax)[0][0]
+            max_bidx = np.where(bins > lmax)[0][0]
         except IndexError:
-            raise ValueError('lmin or lmax is larger than max bin')
-        # note: we include bin that contains lmax
-        # the +1 works even if max_bin is last index b/c numpy idx rules
-        bins = bins[min_bin:max_bin+1]
+            if lmax == bins[-1]:
+                max_bidx = None
+            else:
+                raise ValueError('lmin or lmax is larger than max bin')
+
+        # note: we include bin that contains lmax, num_pass takes care of 
+        # partial bin. The +1 works even if max_bin is last index because
+        # numpy indexing rules.
+        bins = bins[min_bidx:max_bidx]
 
         # check for monotonic order and no repeating values.
         np.testing.assert_array_equal(np.unique(bins), bins)
@@ -346,16 +364,16 @@ class PreCalc(instr.MPIBase):
 
         # create an ell -> bin idx lookup table for 2nd loop
         idx = np.digitize(ells, bins, right=False) - 1
-
-        # boolean index array for inner loop
+        # boolean index array for inner loop determining good ell3
         ba = np.ones(ells.size, dtype=bool)
 
         for lidx1, ell1 in enumerate(ells_sub):
-            if self.mpi_rank == 0:
+            if self.mpi_rank == 0 and verbose:
                 print 'rank: {}, {}/{}'.format(self.mpi_rank,
-                                               lidx1,ells_sub.size)
+                                               lidx1+1,ells_sub.size)
             # which bin?
-            idx1 = np.argmax(ell1 < bins) - 1
+#            idx1 = np.argmax(ell1 < bins) - 1
+            idx1 = idx[ell1 - lmin]
 
             for ell2 in xrange(ell1, lmax+1):
 
@@ -363,7 +381,8 @@ class PreCalc(instr.MPIBase):
                 idx2 = idx[ell2 - lmin]
 
                 # exclude ells below ell2
-                ba[:ell2-lmin+1] = False
+#                ba[:ell2-lmin+1] = False
+                ba[:ell2-lmin] = False
 
                 # exclude parity odd/even
                 if parity:
@@ -381,12 +400,12 @@ class PreCalc(instr.MPIBase):
                 gd_ells = ells[ba]
 
                 # find number of good ells within bin
-                bin_idx = idx[ba] # for each good ell, index of corr. bin
+                bin_idx = idx[ba] # for each good ell, index of corresponding bin
                 # find position in bin_idx of first unique index
                 u_idx, first_idx, count = np.unique(bin_idx, return_index=True,
                                           return_counts=True)
 
-                num_pass[idx1,idx2,u_idx] = count
+                num_pass[idx1,idx2,u_idx] += count # count and u_idx have same size
                 # first pass needs a (u_idx.size, 3) array
                 first_pass[idx1,idx2,u_idx,0] = ell1
                 first_pass[idx1,idx2,u_idx,1] = ell2
@@ -557,8 +576,7 @@ class PreCalc(instr.MPIBase):
         '''
         Store polarization triples internally in (..,3) shaped array.
 
-        For now, only triplets containing a single
-        B.
+        For now, only triplets containing a single B-mode.
 
         Notes
         -----
@@ -586,12 +604,9 @@ class PreCalc(instr.MPIBase):
              optimize=True):
         '''
         Calculate beta_l,L(r) = 2/pi * \int k^2 dk f(k) j_L(kr) T_X,l^(Z)(k).
-        Vectorized. MPI'd by radius
+        Vectorized. MPI'd by radius.
 
-        Arguments
-        ---------
-
-        Keyword arguments
+        Keyword Arguments
         -----------------
         f : array-like
             Factor f(k) of (primordial) factorized shape function.
@@ -874,7 +889,6 @@ class PreCalc(instr.MPIBase):
                             beta_t_f[:,Lidx,nidx,kidx,pidx,ridx] = \
                                 b_beta_t_f[indices,Lidx,nidx,kidx,pidx,ridx]
 
-
         beta_s = np.ascontiguousarray(beta_s_f)
         beta_t = np.ascontiguousarray(beta_t_f)
 
@@ -897,7 +911,13 @@ class Template(PreCalc):
 
     def __init__(self, template='local', **kwargs):
         '''
-        
+     
+        Keyword Arguments
+        -----------------
+        template : str
+            Which template, either local, equilateral or orthogonal
+        kwargs : {MPIBase_opts}
+
         Notes
         -----
         <h zeta zeta > = (2pi)^3 f(k1, k2, k3) delta(k1 + k2 + k3)
@@ -909,25 +929,21 @@ class Template(PreCalc):
         equil: S = 6(-1/(k1k2)^3 - cycl.  - 2/(k1k2k3)^2 + 1/(k1k2k3^3) )
         ortho: S = 6(-3/(k1k2)^3 - cycl.  - 8/(k1k2k3)^2 + 1/(k1k2k3^3) )
 
-        so for local we only need alpha and beta
-        for equilateral and orthgonal we need 
-        alpha, beta, gamma, delta (see creminelli 2005)
+        For local we only need alpha and beta.
+        For equilateral and orthgonal we need alpha, beta, gamma, delta 
+        (see creminelli 2005).
         '''
-        
-        # TODO: add attribute that tells you which template is used
-        # load up template based on choice in init
         
         # You don't have to get primordial parameters from CAMB
         # transfer functions don't depend on them        
         self.scalar_amp = 2.1e-9
-
         self.common_amp = (2*np.pi)**3 * 16 * np.pi**4 * self.scalar_amp**2
 
         super(Template, self).__init__(**kwargs)
 
-        # make sure tensor and scalar ks are equal (not guaranteed by CAMB)
-#        ks = self.depo['scalar']['k']
-#        kt = self.depo['tensor']['k']
+        # TODO: add attribute that tells you which template is used
+        # load up template based on choice in init
+        self.template = template
 
     def local(self, fnl=1):
         '''
@@ -945,9 +961,7 @@ class Template(PreCalc):
             shape: = 2 * fnl
 
         Notes
-        -----
-        
-
+        -----        
         '''
 
         ks = self.depo['scalar']['k']
@@ -997,29 +1011,29 @@ class Fisher(Template):
     def __init__(self, **kwargs):
         '''
 
+        Keyword Arguments
+        -----------------
+        kwargs : {MPIBase_opts}
+        
         '''
-
-        # Extract kwargs for loading CAMB output, such that
-        # they do not get passed to Template class
-#        tag = kwargs.pop('tag')
-#        lensed = kwargs.pop('lensed')
-#        camb_opts = dict(tag=tag, lensed=lensed)
 
         super(Fisher, self).__init__(**kwargs)
 
-#        self.get_camb_output(**camb_opts)
-
-        # Initialize wigner tables for lmax=8000
-#        wig.wig_table_init(2 * 8000, 9)
-#        wig.wig_temp_init(2 * 8000)
-
     def binned_bispectrum(self, DL1, DL2, DL3):
         '''
-        Compute B for each bin
+        Return binned bispectrum for given \Delta L triplet.
 
-        Save as (bins, pol1, pol2, pol3, B)
+        Arguments
+        ---------
+        DL1 : Delta L_1
+        DL2 : Delta L_2
+        DL3 : Delta L_3
 
-        DL1 : Delta L
+        Returns
+        -------
+        
+        binned_bispectrum : array-like 
+            Shape: (num_bins-1,num_bins-1,num_bins-1, pols)
         '''
 
         # loop over bins
@@ -1063,8 +1077,6 @@ class Fisher(Template):
                           'bispectrum is zero')
             return
 
-        import time
-
         Lidx1 = DL1 + 2
         Lidx2 = DL2 + 2
         Lidx3 = DL3 + 2
@@ -1083,7 +1095,7 @@ class Fisher(Template):
         bins_outer = bins_outer_f[self.mpi_rank::self.mpi_size]
         idx_outer = idx_outer_f[self.mpi_rank::self.mpi_size]
 
-        # make every rank knows idx_outer on other ranks
+        # make every rank know idx_outer on other ranks
         idx_per_rank = []
         for rank in xrange(self.mpi_size):
             idx_per_rank.append(idx_outer_f[rank::self.mpi_size])
@@ -1092,7 +1104,6 @@ class Fisher(Template):
         nbins = bins.size - 1 # note, not storing last bin
         bispectrum = np.zeros((bins_outer.size, nbins, nbins, psize))
 
-        t0 = time.time()
         # Note, we do not consider the last bin
         for idxb, (idx1, i1) in enumerate(zip(idx_outer, bins_outer)):
             # note, idxb is bins_outer index for bispectrum per rank
@@ -1118,10 +1129,12 @@ class Fisher(Template):
 
                 for idx3, i3 in enumerate(bins[idx2:-1]):
                     idx3 += idx2
-
+                    
                     num = num_pass[idx1, idx2, idx3]
                     if num == 0.: 
-                        # not a valid tuple
+                        # No valid ell tuples in this bin
+                        # Note: do not impose coditions on 
+                        # the bins here!
                         continue
 
                     # load binned beta
@@ -1343,10 +1356,3 @@ class Fisher(Template):
             # no MPI, so process already has full bispectrum
             return bispectrum
 
-
-        print time.time() - t0
-
-
-if __name__ == '__main__':
-
-    pass
