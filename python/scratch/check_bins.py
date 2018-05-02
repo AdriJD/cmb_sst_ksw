@@ -16,10 +16,11 @@ opj = os.path.join
 
 ana_dir = '/mn/stornext/d8/ITA/spider/adri/analysis/20171217_sst/camb_output/beta/transfer'
 
-F = fisher.Fisher(
-    camb_dir='/mn/stornext/d8/ITA/spider/adri/analysis/20171217_sst/camb_output/high_acy/nolens/')
+#F = fisher.Fisher(
+#    camb_dir='/mn/stornext/d8/ITA/spider/adri/analysis/20171217_sst/camb_output/high_acy/nolens/')
 #F = fisher.Fisher(camb_dir='/mn/stornext/d8/ITA/spider/adri/analysis/20171217_sst/camb_output/')
 #F.get_camb_output(tag='test')
+F = fisher.Fisher()
 F.get_camb_output(tag='no_lens', lensed=False)
 radii = F.get_updated_radii()
 
