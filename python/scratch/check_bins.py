@@ -67,12 +67,12 @@ def bin_test(parity, bins=None, lmin=2, lmax=23):
 if __name__ == '__main__':
     
     lmin = 2
-    lmax = 23
+    lmax = 132
     for parity in ['even', 'odd', None]:
         print 'parity: {}, lmin: {}, lmax: {}'.format(parity, lmin, lmax)
         print 'default bins'
         bin_test(lmin=lmin, lmax=lmax, parity=parity, bins=None)
         print 'bins up to lmax'
-        bin_test(lmin=lmin, lmax=lmax, parity=parity, bins=[2,3,4,10,lmax])
+        bin_test(lmin=None, lmax=lmax, parity=parity, bins=[3,4,10,lmax])
         print 'bins over lmax'
-        bin_test(lmin=lmin, lmax=lmax, parity=parity, bins=[2,3,4,10,lmax+12])
+        bin_test(lmin=None, lmax=lmax, parity=parity, bins=[3,4,10,lmax+12])

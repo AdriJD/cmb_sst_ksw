@@ -49,18 +49,16 @@ class PreCalc(instr.MPIBase):
         wig.wig_table_init(2 * 8000, 9)
         wig.wig_temp_init(2 * 8000)
         
-    def get_camb_output(self, camb_out_dir, **kwargs):
+    def get_camb_output(self, camb_out_dir='.', **kwargs):
         '''
         Store CAMB ouput (transfer functions and Cls) and store
         in internal dictionaries. 
 
-        Arguments
-        ---------
-        camb_out_dir : str
-            Path to folder containing CAMB output
-
         Keyword Arguments
         -----------------
+        camb_out_dir : str
+            Path to folder containing CAMB output. 
+            (default : '.')
         kwargs : {get_spectra_opts}
 
         Notes
@@ -238,10 +236,16 @@ class PreCalc(instr.MPIBase):
         bins_0 = np.arange(2, 101, 1)
 #        bins_0 = np.arange(lmin, 151, 1)        
         bins_1 = np.arange(110, 510, 10)
+#        bins_1a = np.arange(102, 130, 2)
+#        bins_1b = np.arange(133, 160, 5)
+#        bins_1c = np.arange(165, 500, 10)
 #        bins_1 = np.arange(160, 510, 10)
         bins_2 = np.arange(520, 2020, 20)
         bins_3 = np.arange(2030, 10000, 30)
-        bins = np.concatenate((bins_0, bins_1, bins_2, bins_3))
+#        bins = np.concatenate((bins_0, bins_1a, bins_1b, bins_1c,
+#                               bins_2, bins_3))
+        bins = np.concatenate((bins_0, bins_1,
+                               bins_2, bins_3))
 
         return bins
         
@@ -261,7 +265,7 @@ class PreCalc(instr.MPIBase):
         bins : array-like
             Lower value of bins in ell. Must be monotonically increasing.
             No repeated values allowed. May be truncated depending on lmin
-            lmax.
+            lmax. if lmin and lmax are given, bins must encompass them.
         parity : str
             Consider tuples in ell that are parity "odd"
             or "even". If None, use both. (default : "odd")
@@ -291,23 +295,16 @@ class PreCalc(instr.MPIBase):
             precompute Wigner 3j's for values that are used.
         '''
 
-        # Determine lmin and lmax
-#        lmax_s = self.depo['scalar']['lmax']
-#        lmax_t = self.depo['tensor']['lmax']
-        
-#        lmax_cl = self.depo['cls_lmax']
-
-#        lmax_nl = self.depo['nls_lmax']
-#        lmin_nl = self.depo['nls_lmin']
-
         # store parity
         self.depo['parity'] = parity
 
         # If needed, extract lmin, lmax from provided bins
-        if bins:
+        if bins is not None:
             bins = np.array(bins)
             if not lmin:
                 lmin = bins[0]
+            elif lmin < bins[0]:
+                raise ValueError("lmin < mininum bin")
             if not lmax:
                 lmax = bins[-1]
 
@@ -337,8 +334,7 @@ class PreCalc(instr.MPIBase):
                 raise ValueError('lmin or lmax is larger than max bin')
 
         # note: we include bin that contains lmax, num_pass takes care of 
-        # partial bin. The +1 works even if max_bin is last index because
-        # numpy indexing rules.
+        # partial bin.
         bins = bins[min_bidx:max_bidx]
 
         # check for monotonic order and no repeating values.
@@ -372,7 +368,6 @@ class PreCalc(instr.MPIBase):
                 print 'rank: {}, {}/{}'.format(self.mpi_rank,
                                                lidx1+1,ells_sub.size)
             # which bin?
-#            idx1 = np.argmax(ell1 < bins) - 1
             idx1 = idx[ell1 - lmin]
 
             for ell2 in xrange(ell1, lmax+1):
@@ -381,7 +376,6 @@ class PreCalc(instr.MPIBase):
                 idx2 = idx[ell2 - lmin]
 
                 # exclude ells below ell2
-#                ba[:ell2-lmin+1] = False
                 ba[:ell2-lmin] = False
 
                 # exclude parity odd/even
@@ -486,6 +480,7 @@ class PreCalc(instr.MPIBase):
         lmax = ells[-1]
 
         # assume nls start at lmin, cls at ell=2
+        # NOTE, for new noise, noise also starts at ell=2 ?
         nls = nls[:,:(lmax - lmin + 1)]
         cls = cls[:,lmin-2:lmax-1] 
 
@@ -500,6 +495,12 @@ class PreCalc(instr.MPIBase):
                     'ET': 3, 'BT': 4, 'TB': 4, 'EB': 5,
                     'BE': 5}
 
+        # float array with bins + (lmax + 0.1) for binned_stat
+        # binned_stat output is one less than input bins size
+        bins_ext = np.empty(bins.size + 1, dtype=float)
+        bins_ext[:-1] = bins
+        bins_ext[-1] = self.lmax + 0.1
+        
         for pidx1, pol1 in enumerate(['T', 'E', 'B']):
             for pidx2, pol2 in enumerate(['T', 'E', 'B']):
 
@@ -508,12 +509,17 @@ class PreCalc(instr.MPIBase):
                 nell = nls[nidx,:]
 
                 # Bin
-                bin_cov[:-1,pidx1,pidx2], _, _ = binned_statistic(ells, nell,
+#                bin_cov[:-1,pidx1,pidx2], _, _ = binned_statistic(ells, nell,
+#                                                             statistic='mean',
+#                                                             bins=bins)
+
+                bin_cov[:,pidx1,pidx2], _, _ = binned_statistic(ells, nell,
                                                              statistic='mean',
-                                                             bins=bins)
+                                                             bins=bins_ext)
 
         # Invert
-        for bidx in xrange(bins.size - 1):
+#        for bidx in xrange(bins.size - 1):
+        for bidx in xrange(bins.size):
             bin_invcov[bidx,:] = inv(bin_cov[bidx,:])
 
         # Expand binned inverse cov and cov to full size again
@@ -548,12 +554,13 @@ class PreCalc(instr.MPIBase):
         wig_t = np.zeros((ells.size, 5))
 
         for ell in u_ells:
-            # ell is full-sized, so we can simply infer the indices
+            # ell is unbinned, so we can simply infer the indices
             lidx = ell - lmin
 
             for Lidx, DL in enumerate([-2, -1, 0, 1, 2]):
 
                 L = ell + DL
+
                 if DL == -1 or DL == 1:
                     # only here we need to fill the scalar factor
                     tmp = wig.wig3jj([2*ell, 2*L, 2,
@@ -601,7 +608,7 @@ class PreCalc(instr.MPIBase):
         self.pol_trpl = pol_trpl
 
     def beta(self, f=None, L_range=[-2, -1, 0, 1, 2], radii=None, bin=True,
-             optimize=True):
+             optimize=True, verbose=False):
         '''
         Calculate beta_l,L(r) = 2/pi * \int k^2 dk f(k) j_L(kr) T_X,l^(Z)(k).
         Vectorized. MPI'd by radius.
@@ -616,13 +623,17 @@ class PreCalc(instr.MPIBase):
             Array with radii to compute. In units [Mpc], if None,
             use default_radii (default : None)
         L_range : array-like, int
-            Possible deviations from ell, e.g. [-2, -1, 0, 1, 2]
+            Possible deviations from ell, e.g. [-2, -1, 0, 1, 2].
+            Must be monotonically increasing with steps of 2. 
             (default : [0])
         bin : bool
             Bin the resulting beta in ell. (default : True)
         optimize : bool
             Do no calculate spherical bessel for kr << L (default : 
             True)
+        verbose : bool
+            Print progress (default : False)
+
         Returns
         -------
         beta : array-like
@@ -634,9 +645,13 @@ class PreCalc(instr.MPIBase):
 
         ells = self.ells
         L_range = np.asarray(L_range)
-
+        if np.any(~(L_range == np.unique(L_range))):
+            print "L_range: ", L_range
+            raise ValueError("L_range is not monotonically increasing "+
+                             "with steps of 1")
+            
         if f is None:
-            f = self.local()
+            f, _ = self.local()
 
         # you want to allow f to be of shape (nfact, 3, k.size)
         ndim = f.ndim
@@ -692,7 +707,7 @@ class PreCalc(instr.MPIBase):
         # allocate space for bessel functions
         jL = np.zeros((L_range.size, k.size))
 
-        # all arange with all possible L values
+        # an array with all possible L values
         ells_ext = np.arange(ells[-1] + L_range[-1] + 1)
 
         for ridx, radius in enumerate(radii_sub):
@@ -702,8 +717,9 @@ class PreCalc(instr.MPIBase):
             kr_idx = np.digitize(ells_ext, bins=kr, right=True)
             kr_idx[kr_idx == kr.size] = kr.size - 1
 
-            print 'rank: {}, ridx: {}, radius: {} Mpc'.format(
-                                   self.mpi_rank, ridx, radius)
+            if self.mpi_rank == 0 and verbose:
+                print 'rank: {}, ridx: {}/{}, radius: {} Mpc'.format(
+                    self.mpi_rank, ridx, radii_sub.size - 1, radius)
 
             for lidx, ell in enumerate(ells):
 
@@ -729,6 +745,7 @@ class PreCalc(instr.MPIBase):
                     else:
                         kmin_idx = 0
 
+                    # If possible, reuse spherical bessels j_L from ell-1
                     if lidx == 0:
                         # first pass, fill all
                         jL[Lidx,kmin_idx:] = spherical_jn(L, kr[kmin_idx:])
@@ -742,8 +759,8 @@ class PreCalc(instr.MPIBase):
                     for pidx, pol in enumerate(pols_t):
 
                         if pol != 'B':
-                            # note: this assumes no B contr. to scalar
-                            # i.e. no lensing contr. to Cl^BB
+                            # note: this assumes no B contribution to scalar
+                            # i.e. no lensing Cl^BB
                             tmp_s[kmin_idx:] = transfer_s[pidx,ell-2,kmin_idx:]
                             tmp_s[kmin_idx:] *= jL[Lidx,kmin_idx:]
 
@@ -859,6 +876,12 @@ class PreCalc(instr.MPIBase):
         b_beta_s_f = np.asfortranarray(b_beta_s_f)
         b_beta_t_f = np.asfortranarray(b_beta_t_f)
 
+        # float array with bins + (lmax + 0.1) for binned_stat
+        # binned_stat output is one less than input bins size
+        bins_ext = np.empty(bins.size + 1, dtype=float)
+        bins_ext[:-1] = bins
+        bins_ext[-1] = self.lmax + 0.1
+
         for pidx, pol in enumerate(pols_t):
             for kidx in xrange(ks):
                 for ridx, radius in enumerate(radii):
@@ -869,9 +892,13 @@ class PreCalc(instr.MPIBase):
                                 # scalar
                                 tmp_beta = beta_s_f[:,Lidx,nidx,kidx,pidx,ridx]
 
-                                b_beta_s_f[:-1,Lidx,nidx,kidx,pidx,ridx], _, _ = \
+#                                b_beta_s_f[:-1,Lidx,nidx,kidx,pidx,ridx], _, _ = \
+#                                    binned_statistic(ells, tmp_beta, statistic='mean',
+#                                                     bins=bins)
+
+                                b_beta_s_f[:,Lidx,nidx,kidx,pidx,ridx], _, _ = \
                                     binned_statistic(ells, tmp_beta, statistic='mean',
-                                                     bins=bins)
+                                                     bins=bins_ext)
 
                                 # expand to full size
                                 beta_s_f[:,Lidx,nidx,kidx,pidx,ridx] = \
@@ -881,9 +908,13 @@ class PreCalc(instr.MPIBase):
                             # tensor
                             tmp_beta = beta_t_f[:,Lidx,nidx,kidx,pidx,ridx]
 
-                            b_beta_t_f[:-1,Lidx,nidx,kidx,pidx,ridx], _, _ = \
+#                            b_beta_t_f[:-1,Lidx,nidx,kidx,pidx,ridx], _, _ = \
+#                                binned_statistic(ells, tmp_beta, statistic='mean',
+#                                                 bins=bins)
+
+                            b_beta_t_f[:,Lidx,nidx,kidx,pidx,ridx], _, _ = \
                                 binned_statistic(ells, tmp_beta, statistic='mean',
-                                                 bins=bins)
+                                                 bins=bins_ext)
 
                             # expand to full size
                             beta_t_f[:,Lidx,nidx,kidx,pidx,ridx] = \
@@ -1076,7 +1107,8 @@ class Fisher(Template):
             warnings.warn('parity is even and DL1 + DL2 + DL3 is odd, '
                           'bispectrum is zero')
             return
-
+        
+        # Indices to L arrays
         Lidx1 = DL1 + 2
         Lidx2 = DL2 + 2
         Lidx3 = DL3 + 2
@@ -1087,8 +1119,8 @@ class Fisher(Template):
         trapz_loc = trapz
 
         bins_outer_f = bins.copy() # f = full
-        # remove last bin
-        bins_outer_f = bins_outer_f[:-1]
+#        # remove last bin
+#        bins_outer_f = bins_outer_f[:-1]
         idx_outer_f = np.arange(bins_outer_f.size)
 
         # scatter
@@ -1101,14 +1133,15 @@ class Fisher(Template):
             idx_per_rank.append(idx_outer_f[rank::self.mpi_size])
             
         # allocate bispectrum
-        nbins = bins.size - 1 # note, not storing last bin
+#        nbins = bins.size - 1 # note, not storing last bin
+        nbins = bins.size
         bispectrum = np.zeros((bins_outer.size, nbins, nbins, psize))
 
-        # Note, we do not consider the last bin
+#        # Note, we do not consider the last bin
         for idxb, (idx1, i1) in enumerate(zip(idx_outer, bins_outer)):
             # note, idxb is bins_outer index for bispectrum per rank
             # idx1 is index to full-sized bin array, i1 is bin
-            print self.mpi_rank, idxb, idx1
+#            print self.mpi_rank, idxb, idx1
             # load binned beta
             beta_s_l1 = beta_s[idx1,Lidx1,0,0,:,:] # (2,r.size)
             beta_t_l1 = beta_t[idx1,Lidx1,0,0,:,:] # (3,r.size)
@@ -1117,7 +1150,8 @@ class Fisher(Template):
             alpha_t_l1 = beta_t[idx1,Lidx1,0,1,:,:] # (3,r.size)
 
 
-            for idx2, i2 in enumerate(bins[idx1:-1]):
+#            for idx2, i2 in enumerate(bins[idx1:-1]):
+            for idx2, i2 in enumerate(bins[idx1:]):
                 idx2 += idx1
 
                 # load binned beta
@@ -1127,7 +1161,8 @@ class Fisher(Template):
                 alpha_s_l2 = beta_s[idx2,Lidx2,0,1,:,:] # (2,r.size)
                 alpha_t_l2 = beta_t[idx2,Lidx2,0,1,:,:] # (3,r.size)
 
-                for idx3, i3 in enumerate(bins[idx2:-1]):
+#                for idx3, i3 in enumerate(bins[idx2:-1]):
+                for idx3, i3 in enumerate(bins[idx2:]):
                     idx3 += idx2
                     
                     num = num_pass[idx1, idx2, idx3]
@@ -1161,6 +1196,8 @@ class Fisher(Template):
                     # Overall angular part 
                     ang = wig3jj([2*L1, 2*L2, 2*L3,
                                   0, 0, 0])
+ #                   print 'global', ang
+                    # NOTE: TODO, B must be imag, so check this
                     ang *= np.real((-1j)**(ell1 + ell2 + ell3 - 1)) 
                     ang *= (-1)**((L1 + L2 + L3)/2)
                 
@@ -1169,11 +1206,13 @@ class Fisher(Template):
                     ang_tss = wig_t[lidx1, Lidx1]
                     ang_tss *= wig_s[lidx2, Lidx2]
                     ang_tss *= wig_s[lidx3, Lidx3]
+ #                   print 'tss', ang_tss
                     ang_tss *= ang
                     if ang_tss != 0.: 
                         ang_tss *= wig9jj( [(2*ell1),  (2*ell2),  (2*ell3),
                                                 (2*L1),  (2*L2),  (2*L3),
-                                                4,  2,  2] )
+                                                4,  2,  2] ) #NOTE HERE
+ #                       print ang_tss
                     else:
                         # don't waste time on 9j if zero anyway
                         pass
@@ -1182,29 +1221,32 @@ class Fisher(Template):
                     ang_sts = wig_s[lidx1, Lidx1]
                     ang_sts *= wig_t[lidx2, Lidx2]
                     ang_sts *= wig_s[lidx3, Lidx3]
+#                    print 'sts', ang_sts
                     ang_sts *= ang
                     if ang_sts != 0.:
                         ang_sts *= wig9jj( [(2*ell1),  (2*ell2),  (2*ell3),
                                                 (2*L1),  (2*L2),  (2*L3),
                                                 2, 4,  2] )
+#                        print ang_sts
                     else:
                         pass
                     # TSS
                     ang_sst = wig_s[lidx1, Lidx1]
                     ang_sst *= wig_s[lidx2, Lidx2]
                     ang_sst *= wig_t[lidx3, Lidx3]
-
+#                    print 'sst', ang_sst
                     ang_sst *= ang
                     if ang_sst != 0.:
                         ang_sst *= wig9jj( [(2*ell1),  (2*ell2),  (2*ell3),
                                                 (2*L1),  (2*L2),  (2*L3),
                                                 2,  2,  4] )
+#                        print ang_sst
                     else:
                         pass
 
-                    if ang_tss == 0. and ang_sts == 0. and ang_sst == 0.:
+                    if ang_tss == 0. and ang_sts == 0. and ang_sst == 0. and ell1!=ell2!=ell3:
                         # wrong L,ell comb, determine what went wrong
-                        print ell1, ell2, ell3, L1, L2, L3
+                        print ell1, ell2, ell3, L1, L2, L3, num
                         print ang_tss, ang_sts, ang_sst
                         print np.abs(ell1 - ell2) <= ell3 <= ell1 + ell2
                         print np.abs(L1 - L2) <= L3 <= L1 + L2
@@ -1218,6 +1260,7 @@ class Fisher(Template):
                         #continue
 
                     # loop over pol combs
+                    # TODO put this in function
                     for pidx in xrange(psize):
 
                         pidx1, pidx2, pidx3 = pol_trpl[pidx,:]
@@ -1324,7 +1367,7 @@ class Fisher(Template):
                 # place sub B on root in full B for root
                 for i, fidx in enumerate(idx_per_rank[0]):
                     # i is index to sub, fidx index to full
-                    print bispec_full.shape, bispectrum.shape
+#                    print bispec_full.shape, bispectrum.shape
                     bispec_full[fidx,...] = bispectrum[i,...]
 
             else:
