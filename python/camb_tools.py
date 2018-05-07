@@ -5,15 +5,18 @@ it with do_lensing = T, get_tensor_cls = T, and l_sample_boost = 50
 
 import numpy as np
 from scipy.io import FortranFile
+from scipy.interpolate import CubicSpline
 import os
 import sys
 
 opj = os.path.join
 
-def read_camb_output(source_dir, ttype='scalar'):
+def read_camb_output(source_dir, ttype='scalar', high_ell=False):
     '''
     Read in the transfer functions and aux files
     outputted by camb using scipy's FortranFile.
+
+    Interpolates if CAMB sampled ells sparsely.
 
     Arguments
     ---------
@@ -38,7 +41,12 @@ def read_camb_output(source_dir, ttype='scalar'):
         array with wavenumbers in Mpc^-1
     '''
     
-    transfer_name = 'Delta_p_l_k_{}.dat'.format(ttype)
+    if high_ell:
+        transfer_name = 'Delta_p_l_k_{}_hl.dat'.format(ttype)
+
+    else:
+        transfer_name = 'Delta_p_l_k_{}.dat'.format(ttype)
+
     ell_name = 'l_{}.dat'.format(ttype)
     k_name = 'points_{}.dat'.format(ttype)
     numsources_name = 'NumSources_{}.dat'.format(ttype)
@@ -47,15 +55,15 @@ def read_camb_output(source_dir, ttype='scalar'):
     f = FortranFile(opj(source_dir, transfer_name), 'r')
     delta_p_l_k = f.read_reals(float)
     f.close()
-
+    
     # read ells
     f = FortranFile(opj(source_dir, ell_name), 'r')
-    ell = f.read_reals(np.int32)
+    ells = f.read_reals(np.int32)
     f.close()
 
     # trim trailing zeros that camb puts there
-    ell = np.trim_zeros(ell, trim='b')
-    lmax = ell[-1]
+    ells = np.trim_zeros(ells, trim='b')
+    lmax = ells[-1]
 
     # read ks
     f = FortranFile(opj(source_dir, k_name), 'r')
@@ -69,12 +77,54 @@ def read_camb_output(source_dir, ttype='scalar'):
     num_sources = num_sources[0]
 
     # reshape and turn to c-contiguous 
-    transfer = delta_p_l_k.reshape((num_sources, ell.size, k.size), order='F')
+    transfer = delta_p_l_k.reshape((num_sources, ells.size, k.size), order='F')
     transfer = np.ascontiguousarray(transfer)
 
-    return transfer, lmax, k
+    # correct and scale transfer here
+    dells = ells * (ells + 1)
+    # we need to multiply scalar e-mode and tensor I transfer
+    if ttype == 'scalar':
+        transfer[1,...] *= dells[:,np.newaxis]
+    elif ttype == 'tensor':
+        transfer[0,...] *= dells[:,np.newaxis]
 
-def get_spectra(source_dir, tag='', lensed=True):
+    # both scalar and tensor have to be scaled with monopole in uK
+    transfer *= 2.7255e6
+
+    # we scale tensor transfer by 1/(4pi) to match shiraishi's definition
+    if ttype == 'tensor':
+        transfer /= (4. * np.pi)
+
+    # dont interpolate transfer, it fluctuates too fast
+    # instead, use sparsely sampled high ell part for beta
+    # let beta bin using sparse ells
+    # but ideally, use full transfer for 2 <= ell <= 4000 part
+
+#    ells_full = np.arange(2, lmax+1) # lmin is assumed to be 2
+
+#    if not np.array_equal(ells, ells_full):
+#        # interpolate as ells is assumed to be sparsely sampled
+#        print 'interpolating {} transfer function...'.format(ttype)
+#        transfer_full = np.empty((num_sources, ells_full.size, k.size),
+#                                 order='C')
+
+#        for nsidx in xrange(num_sources.size):
+#            for kidx in xrange(k.size):
+#                # cubic interpolation over ell samples, I don't think
+#                # 2d interpolation makes sense in this case.
+#                cs = CubicSpline(ells, transfer[nsidx,:,kidx])
+#                transfer_full[nsidx,:,kidx] = cs(ells_full)
+
+#        print '...done'
+#        transfer = transfer_full
+    if high_ell:
+        # also return ell, because it's non-trivial in this case
+        return transfer, lmax, k, ell
+
+    else:
+        return transfer, lmax, k
+
+def get_spectra(source_dir, tag='', lensed=True, prim_type='tot'):
     '''
     Read camb output and return TT, EE, BB, TE spectra.
     Units are uK^2
@@ -92,6 +142,8 @@ def get_spectra(source_dir, tag='', lensed=True):
     lensed : bool
         Whether spectra contain lensed contributions
         (default : True)
+    prim_type : str
+        Either 'scalar', 'tensor' or 'tot'
 
     Returns
     -------
@@ -100,12 +152,23 @@ def get_spectra(source_dir, tag='', lensed=True):
     lmax : int
     '''
 
+    if lensed and prim_type != 'tot':
+        # I need to think if this is fine, for now: raise error
+        raise ValueError('wrong comb')
+
     if lensed:
         camb_name = 'lensedtotCls.dat'
         # note that lensedtotCls also includes tensor contribution, 
         # lensedCl is just scalar
     else:
-        camb_name = 'totCls.dat'
+        if prim_type == 'tot':
+            camb_name = 'totCls.dat'
+
+        elif prim_type == 'scalar':
+            camb_name = 'scalCls.dat'
+
+        elif prim_type == 'tensor':
+            camb_name = 'tensCls.dat'
 
     cls_in = np.loadtxt(opj(source_dir, '{}_{}'.format(tag, camb_name)))
 

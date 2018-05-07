@@ -14,14 +14,61 @@ import fisher
 
 opj = os.path.join
 
-ana_dir = '/mn/stornext/d8/ITA/spider/adri/analysis/20171217_sst/camb_output/beta/transfer'
+ana_dir = '/mn/stornext/d8/ITA/spider/adri/analysis/20171217_sst/'
+out_dir = opj(ana_dir, 'camb_output/beta/transfer')
+camb_dir = opj(ana_dir, 'camb_output/high_acy/nolens_5200/')
+camb_dir_2 = opj(ana_dir, 'camb_output/high_acy/nolens/')
 
-F = fisher.Fisher(
-    camb_dir='/mn/stornext/d8/ITA/spider/adri/analysis/20171217_sst/camb_output/high_acy/nolens/')
-#F = fisher.Fisher(camb_dir='/mn/stornext/d8/ITA/spider/adri/analysis/20171217_sst/camb_output/')
-#F.get_camb_output(tag='test')
-F.get_camb_output(tag='no_lens', lensed=False)
+F = fisher.Fisher()
+F.get_camb_output(camb_out_dir=camb_dir, tag='no_lens', lensed=False)
+
+tr_si = F.depo['scalar']['transfer']
+tr_ti = F.depo['tensor']['transfer']
+lmax_si = F.depo['scalar']['lmax']
+lmax_ti = F.depo['tensor']['lmax']
+k_si = F.depo['scalar']['k']
+k_ti = F.depo['tensor']['k']
+
+assert np.array_equal(k_si, k_ti)
+assert lmax_si == lmax_ti
+
+# load up transfer fuctions that do not need to be interpolated
+F.get_camb_output(camb_out_dir=camb_dir_2, tag='no_lens', lensed=False)
+
+tr_s = F.depo['scalar']['transfer']
+tr_t = F.depo['tensor']['transfer']
+lmax_s = F.depo['scalar']['lmax']
+lmax_t = F.depo['tensor']['lmax']
+k_s = F.depo['scalar']['k']
+k_t = F.depo['tensor']['k']
+
+assert np.array_equal(k_s, k_t)
+assert lmax_s == lmax_t
+
+# plot some k-slices through both transfer functions
+ells_i = np.arange(2, lmax_si+1)
+ells = np.arange(2, lmax_s+1)
+
+fig, axs = plt.subplots(nrows=2, sharex=True, sharey=True)
+#for kidx in [0, 10, 200, 500, 1500, 10000]:
+for kidx in [10000]:
+    axs[0].plot(ells_i, tr_si[0,:,kidx], label=str(k_si[kidx]))
+    
+    # find corresponding k in full
+    kidx_2 = np.where(k_s >= k_si[kidx])[0][0]
+    axs[1].plot(ells, tr_s[0,:,kidx_2], label=str(k_s[kidx_2]))
+
+axs[0].legend()
+axs[1].legend()
+#axs[1].set_xlim(0, 1000)
+fig.savefig(opj(out_dir, 'interp_vs_full.png'))
+plt.close(fig)
+
+exit()
+
 radii = F.get_updated_radii()
+
+
 
 tr = F.depo['tensor']['transfer']
 k = F.depo['tensor']['k']

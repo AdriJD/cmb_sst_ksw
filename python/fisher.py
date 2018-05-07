@@ -49,7 +49,7 @@ class PreCalc(instr.MPIBase):
         wig.wig_table_init(2 * 8000, 9)
         wig.wig_temp_init(2 * 8000)
         
-    def get_camb_output(self, camb_out_dir='.', **kwargs):
+    def get_camb_output(self, camb_out_dir='.', high_ell=False, **kwargs):
         '''
         Store CAMB ouput (transfer functions and Cls) and store
         in internal dictionaries. 
@@ -72,6 +72,7 @@ class PreCalc(instr.MPIBase):
         cls = None
         tr = None
         k = None
+        ells = None
 
         # load spectra
         if self.mpi_rank == 0:
@@ -91,13 +92,50 @@ class PreCalc(instr.MPIBase):
                 tr, lmax, k = ct.read_camb_output(source_dir,
                                                   ttype=ttype)
 
+                if high_ell:
+                    tr_hl, lmax_hl, k_hl, ells_hl = ct.read_camb_output(
+                        source_dir, ttype=ttype, high_ell=True)
+
+                    # remove low ell from tr_hl
+                    # remember, tr has shape (num_s, ells, ks)
+                    lidx_min_hl = np.where(ells_hl > lmax)[0][0]
+
+                    # create ells that combines low and high
+                    ells = np.concatenate((np.arange(2, lmax+1),
+                                           ells_hl[lidx_min_hl:]))
+                    # allocate combined transfer
+                    num_s = tr_hl.shape[0]
+                    tr_full = np.zeros((num_s,ells.size,k.size))
+
+                    # fill with old transfer
+                    tr_full[:,:lmax,:] = tr
+
+                    # interpolate high ell transfer to low ell ks
+                    for nsidx in xrange(num_s):
+                        # only loop over sparse part of ells
+                        # (full size ell array is len lmax - 1)
+                        for lidx in xrange(ells.size - (lmax - 1)):
+                            # find index of ells_hl
+                            lidx += lidx_min_hl
+
+                            # cubic interpolation over k samples
+                            cs = CubicSpline(k_hl, tr_hl[nsidx,lidx,:])
+                            tr_full[nsidx,lidx,:] = cs(k)
+
+                    tr = tr_full
+                    lmax = lmax_hl
+
             tr = self.broadcast_array(tr)
             k = self.broadcast_array(k)
             lmax = self.broadcast(lmax)
 
+            if high_ell:
+                ells = self.broadcast_array(ells)
+
             self.depo[ttype] = {'transfer' : tr,
                                 'lmax' : lmax,
-                                'k' : k}
+                                'k' : k,
+                                'ells_sparse' : ells} # None normally
 
         # make sure tensor and scalar ks are equal (not 
         # guaranteed by CAMB). Needed b/c both T and S 
@@ -233,19 +271,19 @@ class PreCalc(instr.MPIBase):
             Left side of default bins from ell=2 to ell=1e4
         '''
         # bins used in Meerburg 2016
-        bins_0 = np.arange(2, 101, 1)
-#        bins_0 = np.arange(lmin, 151, 1)        
-        bins_1 = np.arange(110, 510, 10)
-#        bins_1a = np.arange(102, 130, 2)
-#        bins_1b = np.arange(133, 160, 5)
+#        bins_0 = np.arange(2, 101, 1)
+        bins_0 = np.arange(2, 151, 1)        
+#        bins_1 = np.arange(110, 510, 10)
+        bins_1a = np.arange(152, 202, 2)
+        bins_1b = np.arange(205, 503, 5)
 #        bins_1c = np.arange(165, 500, 10)
 #        bins_1 = np.arange(160, 510, 10)
-        bins_2 = np.arange(520, 2020, 20)
-        bins_3 = np.arange(2030, 10000, 30)
-#        bins = np.concatenate((bins_0, bins_1a, bins_1b, bins_1c,
-#                               bins_2, bins_3))
-        bins = np.concatenate((bins_0, bins_1,
+        bins_2 = np.arange(510, 2010, 10)
+        bins_3 = np.arange(2020, 10000, 20)
+        bins = np.concatenate((bins_0, bins_1a, bins_1b,
                                bins_2, bins_3))
+#        bins = np.concatenate((bins_0, bins_1,
+#                               bins_2, bins_3))
 
         return bins
         
@@ -476,6 +514,10 @@ class PreCalc(instr.MPIBase):
         cls = self.depo['cls'] # Signal, lmin = 2
         nls = self.depo['nls'] # Noise
 
+        # to not mess up nls with cls later on
+        nls = nls.copy()
+        cls = cls.copy()
+
         lmin = ells[0]
         lmax = ells[-1]
 
@@ -483,6 +525,13 @@ class PreCalc(instr.MPIBase):
         # NOTE, for new noise, noise also starts at ell=2 ?
         nls = nls[:,:(lmax - lmin + 1)]
         cls = cls[:,lmin-2:lmax-1] 
+
+        # make nls and cls same length as ell
+#        nls_f = np.ones((nls.shape[0], ells.size))
+#        nls_f *= 1e80 # infinite noise
+#        cls_f = nls_f.copy()
+
+#        nls_f[]
 
         # Add signal cov to noise (cls for TB and TE not present in cls)
         nls[:4,:] += cls
@@ -643,7 +692,11 @@ class PreCalc(instr.MPIBase):
         if not self.depo['init_bins']:
             raise ValueError('bins not initialized')
 
+#        if self.depo['ells_sparse'] is not None:
+#            ells = self.depo['ells_sparse']
+#        else:
         ells = self.ells
+
         L_range = np.asarray(L_range)
         if np.any(~(L_range == np.unique(L_range))):
             print "L_range: ", L_range
@@ -722,6 +775,9 @@ class PreCalc(instr.MPIBase):
                     self.mpi_rank, ridx, radii_sub.size - 1, radius)
 
             for lidx, ell in enumerate(ells):
+
+                # NOTE, in case these ells are not full-sized
+                # have a lookup table for idx -> ell
 
                 # loop over capital L's, only need 1, 3 or 5
                 for Lidx, L in enumerate(L_range):
@@ -851,7 +907,6 @@ class PreCalc(instr.MPIBase):
                         beta_t_full[:,:,:,:,:,ridx_tot] = \
                             beta_t_sub[:,:,:,:,:,ridx]
 
-
             # broadcast full beta array to all ranks
             beta_s = self.broadcast_array(beta_s_full)
             beta_t = self.broadcast_array(beta_t_full)
@@ -892,33 +947,26 @@ class PreCalc(instr.MPIBase):
                                 # scalar
                                 tmp_beta = beta_s_f[:,Lidx,nidx,kidx,pidx,ridx]
 
-#                                b_beta_s_f[:-1,Lidx,nidx,kidx,pidx,ridx], _, _ = \
-#                                    binned_statistic(ells, tmp_beta, statistic='mean',
-#                                                     bins=bins)
-
                                 b_beta_s_f[:,Lidx,nidx,kidx,pidx,ridx], _, _ = \
                                     binned_statistic(ells, tmp_beta, statistic='mean',
                                                      bins=bins_ext)
 
                                 # expand to full size
-                                beta_s_f[:,Lidx,nidx,kidx,pidx,ridx] = \
-                                    b_beta_s_f[indices,Lidx,nidx,kidx,pidx,ridx]
+                                # Why not keep beta unbinned? 
+#                                beta_s_f[:,Lidx,nidx,kidx,pidx,ridx] = \
+#                                    b_beta_s_f[indices,Lidx,nidx,kidx,pidx,ridx]
 
 
                             # tensor
                             tmp_beta = beta_t_f[:,Lidx,nidx,kidx,pidx,ridx]
-
-#                            b_beta_t_f[:-1,Lidx,nidx,kidx,pidx,ridx], _, _ = \
-#                                binned_statistic(ells, tmp_beta, statistic='mean',
-#                                                 bins=bins)
 
                             b_beta_t_f[:,Lidx,nidx,kidx,pidx,ridx], _, _ = \
                                 binned_statistic(ells, tmp_beta, statistic='mean',
                                                  bins=bins_ext)
 
                             # expand to full size
-                            beta_t_f[:,Lidx,nidx,kidx,pidx,ridx] = \
-                                b_beta_t_f[indices,Lidx,nidx,kidx,pidx,ridx]
+#                            beta_t_f[:,Lidx,nidx,kidx,pidx,ridx] = \
+#                                b_beta_t_f[indices,Lidx,nidx,kidx,pidx,ridx]
 
         beta_s = np.ascontiguousarray(beta_s_f)
         beta_t = np.ascontiguousarray(beta_t_f)
@@ -926,6 +974,8 @@ class PreCalc(instr.MPIBase):
         b_beta_s = np.ascontiguousarray(b_beta_s_f)
         b_beta_t = np.ascontiguousarray(b_beta_t_f)
 
+        # so now these are the unbinned versions
+        # Note that they might be using a sparse high ell
         self.depo['scalar']['beta'] = beta_s
         self.depo['tensor']['beta'] = beta_t
 
@@ -968,7 +1018,10 @@ class Template(PreCalc):
         # You don't have to get primordial parameters from CAMB
         # transfer functions don't depend on them        
         self.scalar_amp = 2.1e-9
-        self.common_amp = (2*np.pi)**3 * 16 * np.pi**4 * self.scalar_amp**2
+        # NOTE (2pi)^3????
+#        self.common_amp = (2*np.pi)**3 * 16 * np.pi**4 * self.scalar_amp**2
+        # this is the amplitude in e.g. f(k1, k2, k3) = amp * local
+        self.common_amp = 16 * np.pi**4 * self.scalar_amp**2
 
         super(Template, self).__init__(**kwargs)
 
@@ -1050,7 +1103,7 @@ class Fisher(Template):
 
         super(Fisher, self).__init__(**kwargs)
 
-    def binned_bispectrum(self, DL1, DL2, DL3):
+    def binned_bispectrum(self, DL1, DL2, DL3, template='local'):
         '''
         Return binned bispectrum for given \Delta L triplet.
 
@@ -1120,7 +1173,6 @@ class Fisher(Template):
 
         bins_outer_f = bins.copy() # f = full
 #        # remove last bin
-#        bins_outer_f = bins_outer_f[:-1]
         idx_outer_f = np.arange(bins_outer_f.size)
 
         # scatter
@@ -1133,11 +1185,9 @@ class Fisher(Template):
             idx_per_rank.append(idx_outer_f[rank::self.mpi_size])
             
         # allocate bispectrum
-#        nbins = bins.size - 1 # note, not storing last bin
         nbins = bins.size
         bispectrum = np.zeros((bins_outer.size, nbins, nbins, psize))
 
-#        # Note, we do not consider the last bin
         for idxb, (idx1, i1) in enumerate(zip(idx_outer, bins_outer)):
             # note, idxb is bins_outer index for bispectrum per rank
             # idx1 is index to full-sized bin array, i1 is bin
@@ -1150,7 +1200,6 @@ class Fisher(Template):
             alpha_t_l1 = beta_t[idx1,Lidx1,0,1,:,:] # (3,r.size)
 
 
-#            for idx2, i2 in enumerate(bins[idx1:-1]):
             for idx2, i2 in enumerate(bins[idx1:]):
                 idx2 += idx1
 
@@ -1161,7 +1210,6 @@ class Fisher(Template):
                 alpha_s_l2 = beta_s[idx2,Lidx2,0,1,:,:] # (2,r.size)
                 alpha_t_l2 = beta_t[idx2,Lidx2,0,1,:,:] # (3,r.size)
 
-#                for idx3, i3 in enumerate(bins[idx2:-1]):
                 for idx3, i3 in enumerate(bins[idx2:]):
                     idx3 += idx2
                     
@@ -1196,23 +1244,26 @@ class Fisher(Template):
                     # Overall angular part 
                     ang = wig3jj([2*L1, 2*L2, 2*L3,
                                   0, 0, 0])
- #                   print 'global', ang
+
                     # NOTE: TODO, B must be imag, so check this
                     ang *= np.real((-1j)**(ell1 + ell2 + ell3 - 1)) 
                     ang *= (-1)**((L1 + L2 + L3)/2)
                 
+                    ang *= np.sqrt( (2*L1 + 1) * (2*L2 + 1) * (2*L3 + 1))
+                    ang /= (2. * np.sqrt(np.pi))
+
                     # calculate the angular parts for each S, S, T comb
                     # TSS
                     ang_tss = wig_t[lidx1, Lidx1]
                     ang_tss *= wig_s[lidx2, Lidx2]
                     ang_tss *= wig_s[lidx3, Lidx3]
- #                   print 'tss', ang_tss
+
                     ang_tss *= ang
                     if ang_tss != 0.: 
                         ang_tss *= wig9jj( [(2*ell1),  (2*ell2),  (2*ell3),
                                                 (2*L1),  (2*L2),  (2*L3),
                                                 4,  2,  2] ) #NOTE HERE
- #                       print ang_tss
+
                     else:
                         # don't waste time on 9j if zero anyway
                         pass
@@ -1221,26 +1272,26 @@ class Fisher(Template):
                     ang_sts = wig_s[lidx1, Lidx1]
                     ang_sts *= wig_t[lidx2, Lidx2]
                     ang_sts *= wig_s[lidx3, Lidx3]
-#                    print 'sts', ang_sts
+
                     ang_sts *= ang
                     if ang_sts != 0.:
                         ang_sts *= wig9jj( [(2*ell1),  (2*ell2),  (2*ell3),
                                                 (2*L1),  (2*L2),  (2*L3),
                                                 2, 4,  2] )
-#                        print ang_sts
+
                     else:
                         pass
                     # TSS
                     ang_sst = wig_s[lidx1, Lidx1]
                     ang_sst *= wig_s[lidx2, Lidx2]
                     ang_sst *= wig_t[lidx3, Lidx3]
-#                    print 'sst', ang_sst
+
                     ang_sst *= ang
                     if ang_sst != 0.:
                         ang_sst *= wig9jj( [(2*ell1),  (2*ell2),  (2*ell3),
                                                 (2*L1),  (2*L2),  (2*L3),
                                                 2,  2,  4] )
-#                        print ang_sst
+
                     else:
                         pass
 
@@ -1340,15 +1391,6 @@ class Fisher(Template):
                         # the num factor again
                         # Note, in Fisher, num cancels with binned (Cl)^-1's
                         bispec *= num 
-
-                        # divide by Delta_i1i2i3, note bins, not ells
-                        # You should do this in Fisher loop, not in B
-#                        if i1 == i2 == i3:
-#                            bispec /= 6.
-#                        elif i1 != i2 != i3:
-#                            pass
-#                        else:
-#                            bispec /= 2.
                         
                         bispectrum[idxb,idx2,idx3,pidx] = bispec             
             
@@ -1367,7 +1409,6 @@ class Fisher(Template):
                 # place sub B on root in full B for root
                 for i, fidx in enumerate(idx_per_rank[0]):
                     # i is index to sub, fidx index to full
-#                    print bispec_full.shape, bispectrum.shape
                     bispec_full[fidx,...] = bispectrum[i,...]
 
             else:

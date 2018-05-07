@@ -34,6 +34,9 @@ bins_binned = F.get_default_bins()
 bin_dict = dict(full=bins_full,
                 binned=bins_binned)
 
+scalar_amp = 2.1e-9
+amp =  16 * np.pi**4 * scalar_amp**2
+
 for typestr in ['full', 'binned']:
     
     bins = bin_dict[typestr]
