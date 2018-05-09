@@ -41,6 +41,34 @@ def bin_test(parity, bins=None, lmin=2, lmax=23):
                         assert (ell1, ell2, ell3) != (0,0,0) 
                         if parity is not None:
                             assert (ell1 + ell2 + ell3) % 2 == pint 
+
+                        # check if first pass ells fit in bins
+                        assert ell1 >= b1
+                        assert ell2 >= b2
+                        assert ell3 >= b3
+                    
+                        try:
+                            assert ell1 < bins[i1+1]
+                        except IndexError:
+                            if (i1 + 1) >= bins.size:
+                                pass
+                            else:
+                                raise
+                        try:
+                            assert ell2 < bins[i2+1]
+                        except IndexError:
+                            if (i2 + 1) >= bins.size:
+                                pass
+                            else:
+                                raise
+                        try:
+                            assert ell3 < bins[i3+1]
+                        except IndexError:
+                            if (i3 + 1) >= bins.size:
+                                pass
+                            else:
+                                raise
+
                 except:
                     print 'error in bin:'
                     print 'bin_idx: ({},{},{}), bin: ({},{},{}), no. gd_bins: {}, '\
@@ -67,12 +95,15 @@ def bin_test(parity, bins=None, lmin=2, lmax=23):
 if __name__ == '__main__':
     
     lmin = 2
-    lmax = 132
+    lmax = 40
     for parity in ['even', 'odd', None]:
         print 'parity: {}, lmin: {}, lmax: {}'.format(parity, lmin, lmax)
         print 'default bins'
         bin_test(lmin=lmin, lmax=lmax, parity=parity, bins=None)
         print 'bins up to lmax'
-        bin_test(lmin=None, lmax=lmax, parity=parity, bins=[3,4,10,lmax])
+        bin_test(lmin=None, lmax=lmax, parity=parity, bins=[2,3,4,10,lmax])
         print 'bins over lmax'
-        bin_test(lmin=None, lmax=lmax, parity=parity, bins=[3,4,10,lmax+12])
+        bin_test(lmin=None, lmax=lmax, parity=parity, bins=[2,3,4,10,lmax+12])
+
+        # if lmin and lmax of different binning schemes match, they
+        # should have matching sum(num_pass)

@@ -5,7 +5,6 @@ it with do_lensing = T, get_tensor_cls = T, and l_sample_boost = 50
 
 import numpy as np
 from scipy.io import FortranFile
-from scipy.interpolate import CubicSpline
 import os
 import sys
 
@@ -39,17 +38,21 @@ def read_camb_output(source_dir, ttype='scalar', high_ell=False):
         Maximum multipole
     k : array-like
         array with wavenumbers in Mpc^-1
+    ell : array-like
+        Sparsely sampled ells array (only when high_ell is set)
     '''
     
     if high_ell:
         transfer_name = 'Delta_p_l_k_{}_hl.dat'.format(ttype)
+        ell_name = 'l_{}_hl.dat'.format(ttype)
+        k_name = 'points_{}_hl.dat'.format(ttype)
+        numsources_name = 'NumSources_{}_hl.dat'.format(ttype)
 
     else:
         transfer_name = 'Delta_p_l_k_{}.dat'.format(ttype)
-
-    ell_name = 'l_{}.dat'.format(ttype)
-    k_name = 'points_{}.dat'.format(ttype)
-    numsources_name = 'NumSources_{}.dat'.format(ttype)
+        ell_name = 'l_{}.dat'.format(ttype)
+        k_name = 'points_{}.dat'.format(ttype)
+        numsources_name = 'NumSources_{}.dat'.format(ttype)
 
     # read transfer
     f = FortranFile(opj(source_dir, transfer_name), 'r')
@@ -100,26 +103,9 @@ def read_camb_output(source_dir, ttype='scalar', high_ell=False):
     # let beta bin using sparse ells
     # but ideally, use full transfer for 2 <= ell <= 4000 part
 
-#    ells_full = np.arange(2, lmax+1) # lmin is assumed to be 2
-
-#    if not np.array_equal(ells, ells_full):
-#        # interpolate as ells is assumed to be sparsely sampled
-#        print 'interpolating {} transfer function...'.format(ttype)
-#        transfer_full = np.empty((num_sources, ells_full.size, k.size),
-#                                 order='C')
-
-#        for nsidx in xrange(num_sources.size):
-#            for kidx in xrange(k.size):
-#                # cubic interpolation over ell samples, I don't think
-#                # 2d interpolation makes sense in this case.
-#                cs = CubicSpline(ells, transfer[nsidx,:,kidx])
-#                transfer_full[nsidx,:,kidx] = cs(ells_full)
-
-#        print '...done'
-#        transfer = transfer_full
     if high_ell:
         # also return ell, because it's non-trivial in this case
-        return transfer, lmax, k, ell
+        return transfer, lmax, k, ells
 
     else:
         return transfer, lmax, k

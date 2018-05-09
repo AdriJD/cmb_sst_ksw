@@ -14,16 +14,19 @@ sys.path.insert(0,'./../')
 import fisher
 import camb_tools as ct
 
+
+#def calc_fisher(lmin, lmax, nls_tot, prim_template='local',
+#                fsky=1, A_lens=1.):
 lmin = 2
-lmax = 500
+lmax = 5000
 
 opj = os.path.join
 ana_dir = '/mn/stornext/d8/ITA/spider/adri/analysis/20171217_sst/'
 in_dir = opj(ana_dir, 'bispectrum/run_so/')
 img_dir = opj(in_dir, 'fisher')
 noise_dir = opj(ana_dir, 'bispectrum/run_pico', 'noise')
-camb_opts = dict(camb_out_dir = opj(ana_dir, 'camb_output/high_acy/nolens_4000'),
-                 tag='no_lens',
+camb_opts = dict(camb_out_dir = opj(ana_dir, 'camb_output/high_acy/sparse_5000'),
+                 tag='r0',
                  lensed=False)
 
 scalar_amp = 2.1e-9
@@ -34,6 +37,8 @@ amp =  16 * np.pi**4 * scalar_amp**2
 #                  pol_file = opj(ana_dir, 'so_noise/v3', 
 #            'AdvACT_pol_default_Nseasons4.0_NLFyrs2.0_noisecurves_deproj3_mask_16000_ell_EE_BB.txt')
 #                  )
+
+
 
 F = fisher.Fisher()
 F.get_camb_output(**camb_opts)
@@ -49,7 +54,7 @@ nl_ee = nls_pico[:lmax-1,15]
 nl_bb = nls_pico[:lmax-1,15].copy()
 
 # NOTE, turn of e-modes
-#nl_ee *= 1e6
+nl_ee *= 1e6
 # turn of T noise
 #nl_tt *= 0.
 # increase B noise
@@ -71,20 +76,20 @@ nls[2] = nl_bb
 nls[3] = np.zeros_like(nl_bb)
 nls[4] = np.zeros_like(nl_bb)
 nls[5] = np.zeros_like(nl_bb)
-F.depo['nls'] = nls
-F.depo['nls_lmin'] = int(lmin)
-F.depo['nls_lmax'] = int(lmax)
+#F.depo['nls'] = nls
+#F.depo['nls_lmin'] = int(lmin)
+#F.depo['nls_lmax'] = int(lmax)
 
+cls = F.depo['cls'] # shape  = (4, ...)
+cls = cls[:,:lmax-1]
+nls[:4,:] += cls
 
 # Avoid rerunning init_bins(), so load up bins
 bins = np.load(opj(in_dir, 'bins.npy'))
 assert np.array_equal(bins, np.unique(bins))
-print bins
-F.ells = np.arange(2, bins[-1]+1)
-F.lmax = lmax
+ells = np.arange(2, bins[-1]+1)
 
-F.get_binned_invcov(bins=bins)
-
+F.get_binned_invcov(bins=bins, ells=ells, nls_tot=nls)
 bin_invcov = F.bin_invcov
 bin_cov = F.bin_cov
 
@@ -142,6 +147,8 @@ invcov = np.zeros((pol_trpl.size, pol_trpl.size))
 
 # load bispectrum
 bispec = np.load(opj(in_dir, 'bispectrum.npy'))
+bispec[np.isnan(bispec)] = 0.
+print np.any(np.isnan(bispec))
 
 # NOTE amp
 bispec *= amp
@@ -221,9 +228,9 @@ for idx1, i1 in enumerate(bins):
 
 #            print i1, i2, i3, num, f, f0, b0
 #            print B
-#            print cl123
-#            print '\n'
-#            time.sleep(1)
+ #           print cl123
+ #           print '\n'
+ #           time.sleep(1)
 
 
             # both B's have num 

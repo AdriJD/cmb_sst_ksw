@@ -40,7 +40,7 @@ for typestr in ['']:
     #beta_t = np.load(opj(test_dir, 'beta_t.npy'))
     pol_trpl = np.load(opj(test_dir, 'pol_trpl{}.npy'.format(typestr)))
 
-    idx = 50
+    idx = 200
     lmin = bins[idx]
     lmax = bins[-1]
 

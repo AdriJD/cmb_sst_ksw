@@ -10,10 +10,12 @@ from scipy.special import spherical_jn
 from scipy.integrate import trapz
 from scipy.linalg import inv
 from scipy.stats import binned_statistic
+from scipy.interpolate import CubicSpline
 import camb_tools as ct
 import pywigxjpf as wig
 from beamconv import instrument as instr
 import warnings
+from mpi4py import MPI
 
 opj = os.path.join
 
@@ -27,8 +29,6 @@ class PreCalc(instr.MPIBase):
         kwargs : {MPIBase_opts}
         '''
 
-#        self.camb_dir = camb_dir
-
         # TODO what goes in the depo and what does not?
         self.depo = {}
 
@@ -36,14 +36,9 @@ class PreCalc(instr.MPIBase):
 
         # Extract kwargs for loading CAMB output, such that
         # they do not get passed to MPIBase
-#        tag = kwargs.pop('tag', None)
-#        lensed = kwargs.pop('lensed', None)
-#        camb_opts = dict(tag=tag, lensed=lensed)
 
         # init MPIBase 
         super(PreCalc, self).__init__(**kwargs)
-
-#        self.get_camb_output(**camb_opts)
 
         # Initialize wigner tables for lmax=8000
         wig.wig_table_init(2 * 8000, 9)
@@ -59,6 +54,10 @@ class PreCalc(instr.MPIBase):
         camb_out_dir : str
             Path to folder containing CAMB output. 
             (default : '.')
+        high_ell : boool
+            If True, load up additional transfer functions for high
+            ell (>4000) that use sparse samples in ell. Is combined
+            into single transfer function.
         kwargs : {get_spectra_opts}
 
         Notes
@@ -96,6 +95,16 @@ class PreCalc(instr.MPIBase):
                     tr_hl, lmax_hl, k_hl, ells_hl = ct.read_camb_output(
                         source_dir, ttype=ttype, high_ell=True)
 
+#                    print k_hl
+#                    print k
+
+#                    print k_hl.shape
+#                    print k.shape
+
+                    # disable this for tensors
+                    if ttype == 'tensor':
+                        tr_hl *= 0.
+
                     # remove low ell from tr_hl
                     # remember, tr has shape (num_s, ells, ks)
                     lidx_min_hl = np.where(ells_hl > lmax)[0][0]
@@ -103,27 +112,36 @@ class PreCalc(instr.MPIBase):
                     # create ells that combines low and high
                     ells = np.concatenate((np.arange(2, lmax+1),
                                            ells_hl[lidx_min_hl:]))
+                    
+                    # index where sparse part starts in full ells array
+                    lidx_min = np.where(ells > lmax)[0][0] 
+                    assert ells[lidx_min] == ells_hl[lidx_min_hl]
+
                     # allocate combined transfer
                     num_s = tr_hl.shape[0]
                     tr_full = np.zeros((num_s,ells.size,k.size))
 
                     # fill with old transfer
-                    tr_full[:,:lmax,:] = tr
+                    tr_full[:,:lmax-1,:] = tr
 
                     # interpolate high ell transfer to low ell ks
+                    print 'interpolating high_ell transfer...'
                     for nsidx in xrange(num_s):
+
                         # only loop over sparse part of ells
-                        # (full size ell array is len lmax - 1)
-                        for lidx in xrange(ells.size - (lmax - 1)):
-                            # find index of ells_hl
-                            lidx += lidx_min_hl
+                        for lidx, ell in enumerate(ells[lidx_min:]):
+
+                            lidx_hl = lidx + lidx_min_hl # index to ells_hl
+                            lidx_f = lidx + lidx_min # index to ells
+                            assert ells[lidx_f] == ells_hl[lidx_hl]
 
                             # cubic interpolation over k samples
-                            cs = CubicSpline(k_hl, tr_hl[nsidx,lidx,:])
-                            tr_full[nsidx,lidx,:] = cs(k)
+                            cs = CubicSpline(k_hl, tr_hl[nsidx,lidx_hl,:])
+                            tr_full[nsidx,lidx_f,:] = cs(k)
 
                     tr = tr_full
                     lmax = lmax_hl
+                    print '...done'
 
             tr = self.broadcast_array(tr)
             k = self.broadcast_array(k)
@@ -274,12 +292,13 @@ class PreCalc(instr.MPIBase):
 #        bins_0 = np.arange(2, 101, 1)
         bins_0 = np.arange(2, 151, 1)        
 #        bins_1 = np.arange(110, 510, 10)
-        bins_1a = np.arange(152, 202, 2)
-        bins_1b = np.arange(205, 503, 5)
+        bins_1a = np.arange(153, 203, 3)
+        bins_1b = np.arange(206, 506, 6)
 #        bins_1c = np.arange(165, 500, 10)
 #        bins_1 = np.arange(160, 510, 10)
         bins_2 = np.arange(510, 2010, 10)
         bins_3 = np.arange(2020, 10000, 20)
+#        bins_3 = np.arange(2020, 10000, 40)
         bins = np.concatenate((bins_0, bins_1a, bins_1b,
                                bins_2, bins_3))
 #        bins = np.concatenate((bins_0, bins_1,
@@ -287,6 +306,60 @@ class PreCalc(instr.MPIBase):
 
         return bins
         
+    def combine(self, a, b, c):
+        '''
+        Combine three int arrays into a single in array
+        by packing them bitwise. Only works for
+        non-negative ints < 16384
+        '''
+
+        # do some checks because this is a scary function
+        a = np.asarray(a)
+        b = np.asarray(b)
+        c = np.asarray(c)
+
+        if a.dtype != np.int64:
+            raise ValueError('a')
+
+        if b.dtype != np.int64:
+            raise ValueError('b')
+
+        if c.dtype != np.int64:
+            raise ValueError('c')
+        
+        if np.max(a) >= 16384 or np.any(a < 0):
+            raise ValueError('a')
+
+        if np.max(b) >= 16384 or np.any(b < 0):
+            raise ValueError('b')
+
+        if np.max(c) >= 16384 or np.any(c < 0):
+            raise ValueError('c')
+
+        # shift a 28 bits to the left, b 14
+        return (a << 28) | (b << 14) | c
+
+    def unpack(self, comb):
+        '''
+        Unpack int array into 3 arrays
+
+        comb: int, array-like
+        '''        
+
+        comb = np.asarray(comb)
+        if comb.dtype != np.int64:
+            raise ValueError('d')
+
+        # shift a 28 bits back to right
+        a = comb >> 28
+        # shift b 14 bits back to right 
+        # and set all above 16383 to zero (i.e. a)
+        b = (comb >> 14) & 16383
+        # set all above 16383 to zero (i.e. a and b)
+        c = (comb & 16383)
+
+        return a, b, c
+
     def init_bins(self, lmin=None, lmax=None,
                   bins=None, parity='odd',
                   verbose=False):
@@ -382,9 +455,12 @@ class PreCalc(instr.MPIBase):
         num_bins = bins.size
 
         # allocate space for number of good tuples per 3d bin
-        num_pass = np.zeros((num_bins, num_bins, num_bins), dtype=int)
+#        # use unsigned int16 because these arrays can get really big
+        num_pass = np.zeros((num_bins, num_bins, num_bins),
+                            dtype=int)
         # allocate space for first good tuple per 3d bin
-        first_pass = np.zeros((num_bins, num_bins, num_bins, 3), dtype=int)
+        first_pass = np.zeros((num_bins, num_bins, num_bins, 3), 
+                              dtype=int)
 
         if parity == 'odd':
             pmod = 1
@@ -400,6 +476,9 @@ class PreCalc(instr.MPIBase):
         idx = np.digitize(ells, bins, right=False) - 1
         # boolean index array for inner loop determining good ell3
         ba = np.ones(ells.size, dtype=bool)
+
+        if self.mpi_rank == 0 and verbose:
+            print 'initializing bins...'
 
         for lidx1, ell1 in enumerate(ells_sub):
             if self.mpi_rank == 0 and verbose:
@@ -439,6 +518,8 @@ class PreCalc(instr.MPIBase):
 
                 num_pass[idx1,idx2,u_idx] += count # count and u_idx have same size
                 # first pass needs a (u_idx.size, 3) array
+                # NOTE, this is weird, several lidx1, lidx2 may fall in 
+                # same bin, you only use the last ell1, ell2 ?
                 first_pass[idx1,idx2,u_idx,0] = ell1
                 first_pass[idx1,idx2,u_idx,1] = ell2
                 first_pass[idx1,idx2,u_idx,2] = gd_ells[first_idx]
@@ -450,40 +531,84 @@ class PreCalc(instr.MPIBase):
         if self.mpi:
             self.barrier()
 
-            # allocate space to receive arrays on root
-            if self.mpi_rank == 0:
-                num_pass_rec = np.zeros_like(num_pass)
-                first_pass_rec = np.zeros_like(first_pass)
+            method1 = True
+            method2 = False
 
-            # loop over all non-root ranks
-            for rank in xrange(1, self.mpi_size):
+            if method1:
+                # use mpi allreduce to sum num_pass
+                # and take the min value of first_pass (modified to have no zeros)
+                
+                if self.mpi_rank == 0 and verbose:
+                    print '...done, gathering bins from all ranks...'                
 
-                # send arrays to root
-                if self.mpi_rank == rank:
-                    self._comm.Send(num_pass, dest=0, tag=rank)
-                    self._comm.Send(first_pass, dest=0, tag=rank + self.mpi_size)
+                first_pass[first_pass == 0] = 16383
 
+                rec_num_pass = np.empty_like(num_pass)
+                rec_first_pass = np.empty_like(num_pass) # note num instead of first
+
+                # pack first pass bitwise
+                # this works because ells are nonnegative and relatively
+                # small
+                first_pass_packed = self.combine(first_pass[:,:,:,0],
+                                                 first_pass[:,:,:,1],
+                                                 first_pass[:,:,:,2])
+                
+                self._comm.Allreduce(num_pass, rec_num_pass, op=MPI.SUM)
+                # also use allreduce but only take minimum value of packed array
+                # works because l1 <= l2 <= l3, so it correctly picks out the 
+                # lowest sum tuple (
+                self._comm.Allreduce(first_pass_packed, rec_first_pass,
+                                     op=MPI.MIN)
+                # unpack 
+                rec_first_pass = np.stack(self.unpack(rec_first_pass), axis=3)
+                rec_first_pass[rec_first_pass == 16383] = 0 # is that what i did before?
+
+                self.barrier()
+
+                num_pass = rec_num_pass
+                first_pass = rec_first_pass
+
+            if method2:
+
+                if self.mpi_rank == 0 and verbose:
+                    print '...done, gathering bins from all ranks...'
+
+                # allocate space to receive arrays on root
                 if self.mpi_rank == 0:
-                    self._comm.Recv(num_pass_rec, source=rank, tag=rank)
-                    self._comm.Recv(first_pass_rec, source=rank, tag=rank + self.mpi_size)
+                    num_pass_rec = np.empty_like(num_pass)
+                    first_pass_rec = np.empty_like(first_pass)
 
-                    # simply add num_pass but only take first pass if lower
-                    num_pass += num_pass_rec
+                # loop over all non-root ranks
+                for rank in xrange(1, self.mpi_size):
 
-                    sum_root = np.sum(first_pass, axis=3)
-                    sum_rec = np.sum(first_pass_rec, axis=3)
+                    # send arrays to root
+                    if self.mpi_rank == rank:
+                        self._comm.Send(num_pass, dest=0, tag=rank)
+                        self._comm.Send(first_pass, dest=0, tag=rank + self.mpi_size)
+                        print self.mpi_rank, 'sent'
 
-                    mask = sum_root == 0
-                    first_pass[mask,:] = first_pass_rec[mask,:]
+                    if self.mpi_rank == 0:
+                        self._comm.Recv(num_pass_rec, source=rank, tag=rank)
+                        self._comm.Recv(first_pass_rec, source=rank, tag=rank + self.mpi_size)
+                        print self.mpi_rank, 'root received'
 
-                    mask2 = sum_rec < sum_root
-                    # but rec is not zero
-                    mask2 *= sum_rec != 0
-                    first_pass[mask2,:] = first_pass_rec[mask2,:]
+                        # simply add num_pass but only take first pass if lower
+                        num_pass += num_pass_rec
 
-            # broadcast full arrays to all ranks
-            num_pass = self.broadcast_array(num_pass)
-            first_pass = self.broadcast_array(first_pass)
+                        sum_root = np.sum(first_pass, axis=3)
+                        sum_rec = np.sum(first_pass_rec, axis=3)
+
+                        mask = sum_root == 0
+                        first_pass[mask,:] = first_pass_rec[mask,:]
+
+                        mask2 = sum_rec < sum_root
+                        # but rec is not zero
+                        mask2 *= sum_rec != 0
+                        first_pass[mask2,:] = first_pass_rec[mask2,:]
+
+                # broadcast full arrays to all ranks
+                num_pass = self.broadcast_array(num_pass)
+                first_pass = self.broadcast_array(first_pass)
 
         self.barrier()
 
@@ -494,47 +619,64 @@ class PreCalc(instr.MPIBase):
 
         self.depo['init_bins'] = True
 
-    def get_binned_invcov(self, bins=None):
+        if self.mpi_rank == 0 and verbose:
+            print '...done'
+
+    def get_binned_invcov(self, bins=None, ells=None, nls_tot=None):
         '''
         Combine signal and noise into an inverse cov matrix
         per bin. We first bin, then compute inverse.
+
+        Keyword Arguments
+        -----------------
+        bins : array-like            
+        ells : array-like
+            lmax >= bins[-1]
+        nls_tot : array-like
+            Total covariance (Cl + Nl). Shape: (6, ells.size) in 
+            order: TT, EE, BB, TE, TB, EB
 
         Notes
         -----
         Stores shape = (ells, 3, 3) array. ells is unbinned.
         '''
 
-        ells = self.ells
+        if ells is None:
+            ells = self.ells
 
         if bins is None:
             bins = self.bins        
 
+        if not np.array_equal(ells, np.unique(ells)):
+            raise ValueError('ells not monotonically increasing with Dl=1')
+
+        if not ells[-1] >= bins[-1]:
+            raise ValueError('lmax smaller than max bin')
+
         indices = np.digitize(ells, bins, right=False) - 1
-
-        cls = self.depo['cls'] # Signal, lmin = 2
-        nls = self.depo['nls'] # Noise
-
-        # to not mess up nls with cls later on
-        nls = nls.copy()
-        cls = cls.copy()
 
         lmin = ells[0]
         lmax = ells[-1]
 
-        # assume nls start at lmin, cls at ell=2
-        # NOTE, for new noise, noise also starts at ell=2 ?
-        nls = nls[:,:(lmax - lmin + 1)]
-        cls = cls[:,lmin-2:lmax-1] 
+        if nls_tot is None:
+            
+            # get signal and noise from depo
+            # eventually remove this probably
+            cls = self.depo['cls'] # Signal, lmin = 2
+            nls = self.depo['nls'] # Noise
 
-        # make nls and cls same length as ell
-#        nls_f = np.ones((nls.shape[0], ells.size))
-#        nls_f *= 1e80 # infinite noise
-#        cls_f = nls_f.copy()
+            # to not mess up nls with cls later on
+            nls = nls.copy()
+            cls = cls.copy()
 
-#        nls_f[]
+            # assume nls start at lmin, cls at ell=2
+            # NOTE, for new noise, noise also starts at ell=2 ?
+            nls = nls[:,:(lmax - lmin + 1)]
+            cls = cls[:,lmin-2:lmax-1] 
 
-        # Add signal cov to noise (cls for TB and TE not present in cls)
-        nls[:4,:] += cls
+            # Add signal cov to noise (cls for TB and TE not present in cls)
+            nls[:4,:] += cls
+            nls = nls_tot
 
         bin_cov = np.ones((bins.size, 3, 3))
         bin_cov *= np.nan
@@ -548,26 +690,21 @@ class PreCalc(instr.MPIBase):
         # binned_stat output is one less than input bins size
         bins_ext = np.empty(bins.size + 1, dtype=float)
         bins_ext[:-1] = bins
-        bins_ext[-1] = self.lmax + 0.1
+        bins_ext[-1] = lmax + 0.1
         
         for pidx1, pol1 in enumerate(['T', 'E', 'B']):
             for pidx2, pol2 in enumerate(['T', 'E', 'B']):
 
                 # Cl+Nl array
                 nidx = nls_dict[pol1+pol2]
-                nell = nls[nidx,:]
+                nell = nls_tot[nidx,:]
 
                 # Bin
-#                bin_cov[:-1,pidx1,pidx2], _, _ = binned_statistic(ells, nell,
-#                                                             statistic='mean',
-#                                                             bins=bins)
-
                 bin_cov[:,pidx1,pidx2], _, _ = binned_statistic(ells, nell,
                                                              statistic='mean',
                                                              bins=bins_ext)
 
         # Invert
-#        for bidx in xrange(bins.size - 1):
         for bidx in xrange(bins.size):
             bin_invcov[bidx,:] = inv(bin_cov[bidx,:])
 
@@ -582,7 +719,7 @@ class PreCalc(instr.MPIBase):
         self.cov = cov
         self.bin_cov = bin_cov
         self.bin_invcov = bin_invcov
-        self.nls = nls
+        self.nls = nls_tot
 
     def init_wig3j(self):
         '''
@@ -692,10 +829,11 @@ class PreCalc(instr.MPIBase):
         if not self.depo['init_bins']:
             raise ValueError('bins not initialized')
 
-#        if self.depo['ells_sparse'] is not None:
-#            ells = self.depo['ells_sparse']
-#        else:
-        ells = self.ells
+        if self.depo['scalar']['ells_sparse'] is not None:
+            ells = self.depo['scalar']['ells_sparse']
+
+        else:
+            ells = self.ells
 
         L_range = np.asarray(L_range)
         if np.any(~(L_range == np.unique(L_range))):
@@ -766,18 +904,16 @@ class PreCalc(instr.MPIBase):
         for ridx, radius in enumerate(radii_sub):
 
             kr = k * radius
-            # Array that gives L -> kr idx mapping
-            kr_idx = np.digitize(ells_ext, bins=kr, right=True)
-            kr_idx[kr_idx == kr.size] = kr.size - 1
+            # Array that gives L -> kr idx mapping, i.e. in which kr sits ell
+            kr_idx = np.digitize(ells_ext, bins=kr, right=True) 
+            kr_idx[kr_idx == kr.size] = kr.size - 1 # fix last element
 
             if self.mpi_rank == 0 and verbose:
                 print 'rank: {}, ridx: {}/{}, radius: {} Mpc'.format(
                     self.mpi_rank, ridx, radii_sub.size - 1, radius)
 
+            ell_prev = ells[0] - 1
             for lidx, ell in enumerate(ells):
-
-                # NOTE, in case these ells are not full-sized
-                # have a lookup table for idx -> ell
 
                 # loop over capital L's, only need 1, 3 or 5
                 for Lidx, L in enumerate(L_range):
@@ -802,8 +938,9 @@ class PreCalc(instr.MPIBase):
                         kmin_idx = 0
 
                     # If possible, reuse spherical bessels j_L from ell-1
-                    if lidx == 0:
-                        # first pass, fill all
+                    # in case these ells are not full-sized, dont do it                    
+                    if lidx == 0 or ell - 1 != ell_prev:
+                        # first pass, or sparse ells: fill all
                         jL[Lidx,kmin_idx:] = spherical_jn(L, kr[kmin_idx:])
                     else:
                         # second pass only fill new row
@@ -817,10 +954,12 @@ class PreCalc(instr.MPIBase):
                         if pol != 'B':
                             # note: this assumes no B contribution to scalar
                             # i.e. no lensing Cl^BB
-                            tmp_s[kmin_idx:] = transfer_s[pidx,ell-2,kmin_idx:]
+#                            tmp_s[kmin_idx:] = transfer_s[pidx,ell-2,kmin_idx:] #NOTE ell
+                            tmp_s[kmin_idx:] = transfer_s[pidx,lidx,kmin_idx:] 
                             tmp_s[kmin_idx:] *= jL[Lidx,kmin_idx:]
 
-                        tmp_t[kmin_idx:] = transfer_t[pidx,ell-2,kmin_idx:]
+#                        tmp_t[kmin_idx:] = transfer_t[pidx,ell-2,kmin_idx:] # NOTE ell
+                        tmp_t[kmin_idx:] = transfer_t[pidx,lidx,kmin_idx:]
                         tmp_t[kmin_idx:] *= jL[Lidx,kmin_idx:]
 
                         for nidx in xrange(nfact):
@@ -841,7 +980,10 @@ class PreCalc(instr.MPIBase):
                                 beta_t[lidx,Lidx,nidx,kidx,pidx,ridx] = b_int_t
 
                 # permute rows such that oldest row can be replaced next ell
+                # no harm doing this even when ells are sparse, see above
                 jL = np.roll(jL, -1, axis=0)
+
+                ell_prev = ell
 
         beta_s *= (2 / np.pi)
         beta_t *= (2 / np.pi)
@@ -881,8 +1023,8 @@ class PreCalc(instr.MPIBase):
                     beta_t_sub = np.ones((ells.size,L_range.size,nfact,
                                           ks,len(pols_t),r_size))
 
-                    beta_s_sub *= np.nan
-                    beta_t_sub *= np.nan
+#                    beta_s_sub *= np.nan
+#                    beta_t_sub *= np.nan
 
                 # send beta_sub to root
                 if self.mpi_rank == rank:                    
@@ -918,7 +1060,7 @@ class PreCalc(instr.MPIBase):
 
         # Bin beta
         bins = self.bins
-        indices = np.digitize(ells, bins, right=False) - 1
+#        indices = np.digitize(ells, bins, right=False) - 1
 
         beta_s_f = np.asfortranarray(beta_s)
         beta_t_f = np.asfortranarray(beta_t)
@@ -951,6 +1093,9 @@ class PreCalc(instr.MPIBase):
                                     binned_statistic(ells, tmp_beta, statistic='mean',
                                                      bins=bins_ext)
 
+                                # Check for nans!
+                                
+                                    
                                 # expand to full size
                                 # Why not keep beta unbinned? 
 #                                beta_s_f[:,Lidx,nidx,kidx,pidx,ridx] = \
@@ -964,9 +1109,17 @@ class PreCalc(instr.MPIBase):
                                 binned_statistic(ells, tmp_beta, statistic='mean',
                                                  bins=bins_ext)
 
+                            # Check for nans!
+
                             # expand to full size
 #                            beta_t_f[:,Lidx,nidx,kidx,pidx,ridx] = \
 #                                b_beta_t_f[indices,Lidx,nidx,kidx,pidx,ridx]
+
+        # check for nans
+        if np.any(np.isnan(beta_s)):
+            raise ValueError('nan in beta_s')
+        if np.any(np.isnan(beta_t)):
+            raise ValueError('nan in beta_t')            
 
         beta_s = np.ascontiguousarray(beta_s_f)
         beta_t = np.ascontiguousarray(beta_t_f)
@@ -1229,6 +1382,9 @@ class Fisher(Template):
 
                     # Load the ell triplets used per bin
                     ell1, ell2, ell3 = first_pass[idx1, idx2, idx3,:]
+
+                    if ell1 < 2 or ell2 < 2 or ell3 < 2:
+                        raise ValueError("ells are wrong")                        
 
                     # indices to full-size ell arrays
                     lidx1 = ell1 - lmin
