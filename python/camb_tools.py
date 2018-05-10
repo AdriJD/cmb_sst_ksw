@@ -229,9 +229,12 @@ def get_so_noise(tt_file=None, pol_file=None, sat_file=None):
     nl_bb = nl_pol[1]
 
     if sat_file:
-        nl_pol = np.loadtxt(sat_file)
-        ell_sat = np.arange(2, nl.size+2)
+
+        nl_sat = np.loadtxt(sat_file)
+        ell_sat = np.arange(2, nl_sat.size + 2)
         
         return ell_tt, nl_tt, ell_pol, nl_ee, nl_bb, nl_sat, ell_sat
 
-    return ell_tt, nl_tt, ell_pol, nl_ee, nl_bb
+    else:
+        return ell_tt, nl_tt, ell_pol, nl_ee, nl_bb
+

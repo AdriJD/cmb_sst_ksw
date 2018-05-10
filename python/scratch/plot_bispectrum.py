@@ -20,7 +20,7 @@ ana_dir = '/mn/stornext/d8/ITA/spider/adri/analysis/20171217_sst/'
 #test_dir = opj(ana_dir, 'bispectrum/test')
 #test_dir = opj(ana_dir, 'bispectrum/run_pico')
 #test_dir = opj(ana_dir, 'bispectrum/test/full_vs_bin')
-test_dir = opj(ana_dir, 'bispectrum/run_so/')
+test_dir = opj(ana_dir, 'bispectrum/run_so/local')
 
 #for typestr in ['_full', '_binned']:
 for typestr in ['']:

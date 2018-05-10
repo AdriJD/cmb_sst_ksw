@@ -831,7 +831,7 @@ class PreCalc(instr.MPIBase):
 
         if self.depo['scalar']['ells_sparse'] is not None:
             ells = self.depo['scalar']['ells_sparse']
-
+#            ells = np.arange(2, 201) # Note
         else:
             ells = self.ells
 
@@ -914,7 +914,8 @@ class PreCalc(instr.MPIBase):
 
             ell_prev = ells[0] - 1
             for lidx, ell in enumerate(ells):
-
+                if self.mpi_rank == 0:
+                    print lidx
                 # loop over capital L's, only need 1, 3 or 5
                 for Lidx, L in enumerate(L_range):
                     L = ell + L
@@ -954,11 +955,9 @@ class PreCalc(instr.MPIBase):
                         if pol != 'B':
                             # note: this assumes no B contribution to scalar
                             # i.e. no lensing Cl^BB
-#                            tmp_s[kmin_idx:] = transfer_s[pidx,ell-2,kmin_idx:] #NOTE ell
                             tmp_s[kmin_idx:] = transfer_s[pidx,lidx,kmin_idx:] 
                             tmp_s[kmin_idx:] *= jL[Lidx,kmin_idx:]
 
-#                        tmp_t[kmin_idx:] = transfer_t[pidx,ell-2,kmin_idx:] # NOTE ell
                         tmp_t[kmin_idx:] = transfer_t[pidx,lidx,kmin_idx:]
                         tmp_t[kmin_idx:] *= jL[Lidx,kmin_idx:]
 
@@ -1022,9 +1021,6 @@ class PreCalc(instr.MPIBase):
                                           ks,len(pols_s),r_size))
                     beta_t_sub = np.ones((ells.size,L_range.size,nfact,
                                           ks,len(pols_t),r_size))
-
-#                    beta_s_sub *= np.nan
-#                    beta_t_sub *= np.nan
 
                 # send beta_sub to root
                 if self.mpi_rank == rank:                    
@@ -1222,7 +1218,8 @@ class Template(PreCalc):
         km1 = ks**-1
         ones = np.ones(ks.size)
 
-        template = np.asarray([km3, km2, km1, ones])
+#        template = np.asarray([km3, km2, km1, ones])
+        template = np.asarray([km3, ones, km2, km1])
         amp = 6. * fnl
         
         return template, amp
@@ -1238,7 +1235,8 @@ class Template(PreCalc):
         km1 = ks**-1
         ones = np.ones(ks.size)
 
-        template = np.asarray([km3, km2, km1, ones])
+#        template = np.asarray([km3, km2, km1, ones])
+        template = np.asarray([km3, ones, km2, km1])
         amp = 6. * fnl
         
         return template, amp
@@ -1256,7 +1254,7 @@ class Fisher(Template):
 
         super(Fisher, self).__init__(**kwargs)
 
-    def binned_bispectrum(self, DL1, DL2, DL3, template='local'):
+    def binned_bispectrum(self, DL1, DL2, DL3, prim_template='local'):
         '''
         Return binned bispectrum for given \Delta L triplet.
 
@@ -1341,6 +1339,16 @@ class Fisher(Template):
         nbins = bins.size
         bispectrum = np.zeros((bins_outer.size, nbins, nbins, psize))
 
+        # numerical factors that difference equilateral and orthogonal
+        if prim_template == 'equilateral':
+            num_a = -1.
+            num_b = -2.
+            num_c = 1.
+        elif prim_template == 'orthogonal':
+            num_a = -3.
+            num_b = -8.
+            num_c = 3.                
+
         for idxb, (idx1, i1) in enumerate(zip(idx_outer, bins_outer)):
             # note, idxb is bins_outer index for bispectrum per rank
             # idx1 is index to full-sized bin array, i1 is bin
@@ -1352,6 +1360,13 @@ class Fisher(Template):
             alpha_s_l1 = beta_s[idx1,Lidx1,0,1,:,:] # (2,r.size)
             alpha_t_l1 = beta_t[idx1,Lidx1,0,1,:,:] # (3,r.size)
 
+            if prim_template != 'local':
+                delta_s_l1 = beta_s[idx1,Lidx1,0,2,:,:] 
+                delta_t_l1 = beta_t[idx1,Lidx1,0,2,:,:] 
+
+                gamma_s_l1 = beta_s[idx1,Lidx1,0,3,:,:]
+                gamma_t_l1 = beta_t[idx1,Lidx1,0,3,:,:]
+            
 
             for idx2, i2 in enumerate(bins[idx1:]):
                 idx2 += idx1
@@ -1362,6 +1377,14 @@ class Fisher(Template):
 
                 alpha_s_l2 = beta_s[idx2,Lidx2,0,1,:,:] # (2,r.size)
                 alpha_t_l2 = beta_t[idx2,Lidx2,0,1,:,:] # (3,r.size)
+
+                if prim_template != 'local':
+                    delta_s_l2 = beta_s[idx2,Lidx2,0,2,:,:] 
+                    delta_t_l2 = beta_t[idx2,Lidx2,0,2,:,:] 
+
+                    gamma_s_l2 = beta_s[idx2,Lidx2,0,3,:,:]
+                    gamma_t_l2 = beta_t[idx2,Lidx2,0,3,:,:]
+
 
                 for idx3, i3 in enumerate(bins[idx2:]):
                     idx3 += idx2
@@ -1379,6 +1402,13 @@ class Fisher(Template):
 
                     alpha_s_l3 = beta_s[idx3,Lidx3,0,1,:,:] # (2,r.size)
                     alpha_t_l3 = beta_t[idx3,Lidx3,0,1,:,:] # (3,r.size)
+
+                    if prim_template != 'local':
+                        delta_s_l3 = beta_s[idx3,Lidx3,0,2,:,:] 
+                        delta_t_l3 = beta_t[idx3,Lidx3,0,2,:,:] 
+
+                        gamma_s_l3 = beta_s[idx3,Lidx3,0,3,:,:]
+                        gamma_t_l3 = beta_t[idx3,Lidx3,0,3,:,:]
 
                     # Load the ell triplets used per bin
                     ell1, ell2, ell3 = first_pass[idx1, idx2, idx3,:]
@@ -1417,8 +1447,8 @@ class Fisher(Template):
                     ang_tss *= ang
                     if ang_tss != 0.: 
                         ang_tss *= wig9jj( [(2*ell1),  (2*ell2),  (2*ell3),
-                                                (2*L1),  (2*L2),  (2*L3),
-                                                4,  2,  2] ) #NOTE HERE
+                                            (2*L1),  (2*L2),  (2*L3),
+                                            4,  2,  2] ) #NOTE HERE
 
                     else:
                         # don't waste time on 9j if zero anyway
@@ -1492,6 +1522,36 @@ class Fisher(Template):
                             integrand_tss += alpha_t_l1[pidx1,:] * \
                                 beta_s_l2[pidx2,:] * beta_s_l3[pidx3,:]
 
+                            if prim_template != 'local':
+                                integrand_tss *= num_a
+
+                                integrand_tss += num_b * delta_t_l1[pidx1,:] * \
+                                delta_s_l2[pidx2,:] * delta_s_l3[pidx3,:]
+
+                                # bgd
+                                integrand_tss += num_c * beta_t_l1[pidx1,:] * \
+                                gamma_s_l2[pidx2,:] * delta_s_l3[pidx3,:]
+
+                                # bdg
+                                integrand_tss += num_c * beta_t_l1[pidx1,:] * \
+                                delta_s_l2[pidx2,:] * gamma_s_l3[pidx3,:]
+
+                                # gbd
+                                integrand_tss += num_c * gamma_t_l1[pidx1,:] * \
+                                beta_s_l2[pidx2,:] * delta_s_l3[pidx3,:]
+
+                                # gdb
+                                integrand_tss += num_c * gamma_t_l1[pidx1,:] * \
+                                delta_s_l2[pidx2,:] * beta_s_l3[pidx3,:]
+
+                                # dgb
+                                integrand_tss += num_c * delta_t_l1[pidx1,:] * \
+                                gamma_s_l2[pidx2,:] * beta_s_l3[pidx3,:]
+
+                                # dbg
+                                integrand_tss += num_c * delta_t_l1[pidx1,:] * \
+                                beta_s_l2[pidx2,:] * gamma_s_l3[pidx3,:]
+
                             integrand_tss *= ang_tss
                             
                             integrand += integrand_tss
@@ -1513,6 +1573,36 @@ class Fisher(Template):
                             integrand_sts += alpha_s_l1[pidx1,:] * \
                                 beta_t_l2[pidx2,:] * beta_s_l3[pidx3,:]
 
+                            if prim_template != 'local':
+                                integrand_sts *= num_a
+
+                                integrand_sts += num_b * delta_s_l1[pidx1,:] * \
+                                delta_t_l2[pidx2,:] * delta_s_l3[pidx3,:]
+
+                                # bgd
+                                integrand_sts += num_c * beta_s_l1[pidx1,:] * \
+                                gamma_t_l2[pidx2,:] * delta_s_l3[pidx3,:]
+
+                                # bdg
+                                integrand_sts += num_c * beta_s_l1[pidx1,:] * \
+                                delta_t_l2[pidx2,:] * gamma_s_l3[pidx3,:]
+
+                                # gbd
+                                integrand_sts += num_c * gamma_s_l1[pidx1,:] * \
+                                beta_t_l2[pidx2,:] * delta_s_l3[pidx3,:]
+
+                                # gdb
+                                integrand_sts += num_c * gamma_s_l1[pidx1,:] * \
+                                delta_t_l2[pidx2,:] * beta_s_l3[pidx3,:]
+
+                                # dgb
+                                integrand_sts += num_c * delta_s_l1[pidx1,:] * \
+                                gamma_t_l2[pidx2,:] * beta_s_l3[pidx3,:]
+
+                                # dbg
+                                integrand_tss += num_c * delta_s_l1[pidx1,:] * \
+                                beta_t_l2[pidx2,:] * gamma_s_l3[pidx3,:]
+
                             integrand_sts *= ang_sts
 
                             integrand += integrand_sts
@@ -1533,6 +1623,36 @@ class Fisher(Template):
 
                             integrand_sst += alpha_s_l1[pidx1,:] * \
                                 beta_s_l2[pidx2,:] * beta_t_l3[pidx3,:]
+
+                            if prim_template != 'local':
+                                integrand_sst *= num_a
+
+                                integrand_sst += num_b * delta_s_l1[pidx1,:] * \
+                                delta_s_l2[pidx2,:] * delta_t_l3[pidx3,:]
+
+                                # bgd
+                                integrand_sst += num_c * beta_s_l1[pidx1,:] * \
+                                gamma_s_l2[pidx2,:] * delta_t_l3[pidx3,:]
+
+                                # bdg
+                                integrand_sst += num_c * beta_s_l1[pidx1,:] * \
+                                delta_s_l2[pidx2,:] * gamma_t_l3[pidx3,:]
+
+                                # gbd
+                                integrand_sst += num_c * gamma_s_l1[pidx1,:] * \
+                                beta_s_l2[pidx2,:] * delta_t_l3[pidx3,:]
+
+                                # gdb
+                                integrand_sst += num_c * gamma_s_l1[pidx1,:] * \
+                                delta_s_l2[pidx2,:] * beta_t_l3[pidx3,:]
+
+                                # dgb
+                                integrand_sst += num_c * delta_s_l1[pidx1,:] * \
+                                gamma_s_l2[pidx2,:] * beta_t_l3[pidx3,:]
+
+                                # dbg
+                                integrand_sst += num_c * delta_s_l1[pidx1,:] * \
+                                beta_s_l2[pidx2,:] * gamma_t_l3[pidx3,:]
 
                             integrand_sst *= ang_sst
 
