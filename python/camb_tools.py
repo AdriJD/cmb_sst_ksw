@@ -63,6 +63,8 @@ def read_camb_output(source_dir, ttype='scalar', high_ell=False):
     f = FortranFile(opj(source_dir, ell_name), 'r')
     ells = f.read_reals(np.int32)
     f.close()
+    # Convert to 64 bit to avoid overflow later.
+    ells = ells.astype(np.int64)
 
     # trim trailing zeros that camb puts there
     ells = np.trim_zeros(ells, trim='b')
@@ -77,6 +79,7 @@ def read_camb_output(source_dir, ttype='scalar', high_ell=False):
     f = FortranFile(opj(source_dir, numsources_name), 'r')
     num_sources = f.read_reals(np.int32)
     f.close()
+    num_sources = num_sources.astype(np.int64)
     num_sources = num_sources[0]
 
     # reshape and turn to c-contiguous 
