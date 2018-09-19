@@ -128,7 +128,7 @@ def get_nls(lat_path, sac_path, lmax, noise_level_lat='threshold',
     lat_pol_file = opj(lat_path, lat_pol_file)
 
     sac_file = 'Nl_SO_post_comp_sep_sensitivity_mode'\
-        '_{}_one_over_f_mode_0_TLF_1.5.txt'.format(sens_lat,
+        '_{}_one_over_f_mode_{}_TLF_1.5.txt'.format(sens_lat,
                                                    ell_knee_idx)
 
     sac_file = opj(sac_path, sac_file)
@@ -146,9 +146,11 @@ def get_nls(lat_path, sac_path, lmax, noise_level_lat='threshold',
     lmin_sac = 2
     lmax_sac = int( ells_sac[-1])
 
+    print lmax_sac
+
     # combine, first lat then sac
     nls[0,lmin_tt - 2:lmax_tt - 1] = nl_tt 
-    nls[1,lmin_pol - 2:lmax_pol - 1] = nl_ee
+    nls[1,lmin_pol - 2:lmax_pol - 1] = nl_ee 
     nls[1,lmin_sac - 2:lmax_sac - 1] = nl_sac
     nls[2,lmin_pol - 2:lmax_pol - 1] = nl_bb 
     nls[2,lmin_sac - 2:lmax_sac - 1] = nl_sac
@@ -207,7 +209,7 @@ def load_aux(path):
 def calc_fisher(lmin, lmax, out_dir, nls_tot, bispec,
                 bins, num_pass, pol_trpl,
                 prim_template='local',
-                fsky=1, A_lens=1.):
+                fsky=1, A_lens=1., plot_label=''):
 #    lmin = 2
 #    lmax = 5000
 
@@ -225,54 +227,6 @@ def calc_fisher(lmin, lmax, out_dir, nls_tot, bispec,
 
     F = fisher.Fisher()
 
-#    F.get_camb_output(**camb_opts)
-    #F.get_noise_curves(cross_noise=False, **noise_opts)
-#    F.init_pol_triplets()
-
-    # hacky way to update noise
-#    nls_pico = np.loadtxt(opj(noise_dir, 'noise_PICO.dat'))
-#    ells_pico = np.arange(2, lmax+1)
-#    dell = ells_pico * (ells_pico + 1) / 2. / np.pi
-#    nl_tt = nls_pico[:lmax-1,1]
-#    nl_ee = nls_pico[:lmax-1,15]
-#    nl_bb = nls_pico[:lmax-1,15].copy()
-
-#    # NOTE, turn of e-modes
-#    nl_ee *= 1e6
-#    # turn of T noise
-#    #nl_tt *= 0.
-#    # increase B noise
-#    #nl_bb *= 10
-
-
-#    nl_tt = np.ascontiguousarray(nl_tt)
-#    nl_ee = np.ascontiguousarray(nl_ee)
-#    nl_bb = np.ascontiguousarray(nl_bb)
-
-#    nl_tt /= dell
-#    nl_ee /= dell
-#    nl_bb /= dell
-
-#    nls = np.ones((6, ells_pico.size))
-#    nls[0] = nl_tt 
-#    nls[1] = nl_ee 
-#    nls[2] = nl_bb 
-#    nls[3] = np.zeros_like(nl_bb)
-#    nls[4] = np.zeros_like(nl_bb)
-#    nls[5] = np.zeros_like(nl_bb)
-#    #F.depo['nls'] = nls
-#    #F.depo['nls_lmin'] = int(lmin)
-#    #F.depo['nls_lmax'] = int(lmax)
-
-#    cls = F.depo['cls'] # shape  = (4, ...)
-#    cls = cls[:,:lmax-1]
-#    nls[:4,:] += cls
-
-    # Avoid rerunning init_bins(), so load up bins
-#    bins = np.load(opj(in_dir, 'bins.npy'))
-#    assert np.array_equal(bins, np.unique(bins))
-
-#    ells = np.arange(2, bins[-1]+1)
     lmax = nls_tot.shape[1] + 1
     ells = np.arange(2, lmax+1)
 
@@ -295,8 +249,8 @@ def calc_fisher(lmin, lmax, out_dir, nls_tot, bispec,
         ax.legend()
     fig.tight_layout()
     fig2.tight_layout()
-    fig.savefig(opj(out_dir, 'bin_invcov.png'))
-    fig2.savefig(opj(out_dir, 'bin_invcov_log.png'))
+    fig.savefig(opj(out_dir, 'bin_invcov_{}.png'.format(plot_label)))
+    fig2.savefig(opj(out_dir, 'bin_invcov_log_{}.png'.format(plot_label)))
     plt.close(fig)
     plt.close(fig2)
 
@@ -318,29 +272,16 @@ def calc_fisher(lmin, lmax, out_dir, nls_tot, bispec,
     #    ax.set_ylim(0, 0.1)
     fig.tight_layout()
     fig2.tight_layout()
-    fig.savefig(opj(out_dir, 'bin_cov.png'))
-    fig2.savefig(opj(out_dir, 'bin_cov_log.png'))
+    fig.savefig(opj(out_dir, 'bin_cov_{}.png'.format(plot_label)))
+    fig2.savefig(opj(out_dir, 'bin_cov_log_{}.png'.format(plot_label)))
     plt.close(fig)
     plt.close(fig2)
-
-#    # load pol_trpl (shape: (12, 3))
-#    pol_trpl = np.load(opj(in_dir, 'pol_trpl.npy'))
 
     # allocate bin-sized fisher matrix (same size as outer loop)
     fisher_per_bin = np.ones(bins.size) * np.nan
 
     # allocate 12 x 12 cov for use in inner loop
     invcov = np.zeros((pol_trpl.size, pol_trpl.size))
-
-    # load bispectrum
-#    bispec = np.load(opj(in_dir, 'bispectrum.npy'))
-#    bispec[np.isnan(bispec)] = 0.
-
-    # NOTE amp
-#    bispec *= amp
-
-#    num_pass = np.load(opj(in_dir, 'num_pass.npy'))
-
 
     # create (binned) inverse cov matrix for each ell
     # i.e. use the fact that 12x12 pol invcov can be factored
@@ -376,7 +317,7 @@ def calc_fisher(lmin, lmax, out_dir, nls_tot, bispec,
     # loop same loop as in binned_bispectrum
     for idx1, i1 in enumerate(bins[start_bidx:]):
         idx1 += start_bidx
-        print 'fisher', i1
+#        print 'fisher', i1
         cl1 = invcov1[idx1,:,:] # 12x12
 
         # init
@@ -416,19 +357,21 @@ def calc_fisher(lmin, lmax, out_dir, nls_tot, bispec,
                 fisher_per_bin[idx1] += f
                 f_check += f
 
-    fisher_per_bin[idx1] *= np.sqrt(fsky)
-    f_check *= np.sqrt(fsky)
+    fisher_per_bin *= fsky
+    f_check *= fsky
                 
 
     min_f = []
 
-    print fisher_per_bin
-    print 'fisher:', np.sum(fisher_per_bin)
-    print 'fisher_check:', f_check
+#    print fisher_per_bin
+#    print 'fisher:', np.sum(fisher_per_bin)
+    print prim_template
+    print 'fisher_check:', f_check * (4*np.pi / np.sqrt(8))**2
+    print 'sigma:', 1/np.sqrt(f_check) * (np.sqrt(8)/4./np.pi)
 
     for lidx, lmin in enumerate(range(2, 40)):
         f = np.sum(fisher_per_bin[lmin-2:])
-        print np.sqrt(f)
+#        print np.sqrt(f)
         min_f.append(np.sqrt(f))
 
     fig, ax = plt.subplots(1,1)
@@ -439,19 +382,19 @@ def calc_fisher(lmin, lmax, out_dir, nls_tot, bispec,
     #plt.ylim(0,0.1)
     ax.set_xlabel(r'$\ell_{\mathrm{min}}$')
     ax.set_ylabel(r'$\sigma^{-1} (\sqrt{r} f^{h\zeta\zeta}_{\mathrm{NL}}) \, / \, \sigma^{-1} (\sqrt{r} f^{h\zeta\zeta}_{\mathrm{NL}}, \ell_{\mathrm{min}}=2)$')
-    fig.savefig(opj(out_dir, 'min_f.png'))
+    fig.savefig(opj(out_dir, 'min_f_{}.png'.format(plot_label)))
     plt.close(fig)
 
     sigma = 1 / np.sqrt(np.cumsum(fisher_per_bin))
 
     fig, ax = plt.subplots(1,1)
     ax.plot(bins, sigma)
-    fig.savefig(opj(out_dir, 'sigma.png'))
+    fig.savefig(opj(out_dir, 'sigma_{}.png'.format(plot_label)))
     plt.close(fig)
 
     fig, ax = plt.subplots(1,1)
     ax.semilogy(bins, fisher_per_bin)
-    fig.savefig(opj(out_dir, 'fisher_ell.png'))
+    fig.savefig(opj(out_dir, 'fisher_ell_{}.png'.format(plot_label)))
     plt.close(fig)
 
 if __name__ == '__main__':
@@ -460,7 +403,7 @@ if __name__ == '__main__':
     cls_path = opj(ana_dir, 'camb_output/high_acy/sparse_5000')
     lat_path = opj(ana_dir, 'so_noise/v3/so')
     sac_path = opj(ana_dir, 'so_noise/sat')
-    lmin = 30
+    lmin = 30 
     lmax = 5000
     fsky = 0.1
     bispec_path = dict(local=opj(ana_dir, 'bispectrum/run_so/local'),
@@ -470,7 +413,7 @@ if __name__ == '__main__':
     threshold_opts = dict(noise_level_lat='threshold',
                           noise_level_sac='threshold',
                           ell_knee='pessimistic',
-                          A_lens=1.)
+                          A_lens=1.) 
 
     baseline_opts = dict(noise_level_lat='baseline',
                           noise_level_sac='baseline',
@@ -482,7 +425,9 @@ if __name__ == '__main__':
                           ell_knee='optimistic',
                           A_lens=0.5)
 
-    for prim_template in ['local', 'orthogonal']:
+    for prim_template in ['local', 'equilateral', 'orthogonal']:
+#    for prim_template in ['orthogonal']:
+#    for prim_template in ['equilateral']:
         # load bispectrum
         b_path = bispec_path[prim_template]
         fisher_path = opj(b_path, 'fisher')
@@ -492,7 +437,9 @@ if __name__ == '__main__':
         bispec = load_bispectrum(b_path, amp)
         bins, num_pass, pol_trpl = load_aux(b_path)
 
-        for noise_opts in [threshold_opts, baseline_opts, goal_opts]:                
+        for noise_opts, n_label in zip([threshold_opts, baseline_opts, goal_opts],
+                              ['threshold', 'baseline', 'goal']):
+#        for noise_opts in [threshold_opts]:#, baseline_opts, goal_opts]:                
 
             noise_opts = copy.deepcopy(noise_opts)
             A_lens = noise_opts.pop('A_lens')
@@ -500,45 +447,20 @@ if __name__ == '__main__':
             cls = get_cls(cls_path, lmax, A_lens=A_lens)
                 
             for deproj in [0,3]:
+#            for deproj in [0]:
                 # load noise
                 nls = get_nls(lat_path, sac_path, lmax, deproj_level=deproj, 
-                              fsky=0.1, **noise_opts)
-                
+                              fsky=fsky, **noise_opts)
+
                 totcov = get_totcov(cls, nls)                
 
+                plot_label  = '{}_{}_{}'.format(prim_template, n_label, deproj)
+                                       
+                print plot_label                       
                 calc_fisher(lmin, lmax, fisher_path, totcov, bispec,
                             bins, num_pass, pol_trpl,
                             prim_template=prim_template,
-                            fsky=fsky, A_lens=A_lens)
+                            fsky=fsky, A_lens=A_lens,
+                            plot_label=plot_label)
 
 
-#    prim_template = 'local'
-
-    
-#    A_lens = 0.5
-
-    
-#    cls = get_cls(cls_path, lmax, A_lens=A_lens)
-
-#    nls = get_nls(lat_path, sac_path, lmax, noise_level_lat='threshold', 
-#            noise_level_sac='threshold', ell_knee='pessimistic',
-#            deproj_level=0, fsky=0.1)
-#    print cls.shape
-#    print cls.shape
-
-#    amp = get_prim_amp(prim_template=prim_template)
-#    B = load_bispectrum(bispec_path[prim_template], amp)
-
-#    bins, num_pass, pol_trpl = load_aux(bispec_path[prim_template])
-
-#    calc_fisher(lmin, lmax, in_dir, out_dir, nls_tot, prim_template='local',
-#                fsky=1, A_lens=1.):
-
-
-#    in_dir = opj(ana_dir, 'bispectrum/run_so/')
-#    img_dir = opj(in_dir, 'fisher')
-#    noise_dir = opj(ana_dir, 'bispectrum/run_pico', 'noise')
-#    camb_opts = dict(camb_out_dir = opj(ana_dir, 'camb_output/high_acy/sparse_5000'),
-#                     tag='r0',
-#                     lensed=False)
-    
