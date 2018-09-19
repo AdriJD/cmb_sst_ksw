@@ -83,13 +83,15 @@ def read_camb_output(source_dir, ttype='scalar', high_ell=False):
     transfer = delta_p_l_k.reshape((num_sources, ells.size, k.size), order='F')
     transfer = np.ascontiguousarray(transfer)
 
-    # correct and scale transfer here
-    dells = ells * (ells + 1)
-    # we need to multiply scalar e-mode and tensor I transfer
+    # Correct and scale transfer here.
+    prefactor = np.sqrt((ells + 2) * (ells + 1) * ells * (ells - 1))
+    # We need to multiply scalar e-mode and tensor I transfer, 
+    # see Zaldarriaga 1997 eq. 18 and 39. (CAMB applies these factors
+    # at a later stage).
     if ttype == 'scalar':
-        transfer[1,...] *= dells[:,np.newaxis]
+        transfer[1,...] *= prefactor[:,np.newaxis]
     elif ttype == 'tensor':
-        transfer[0,...] *= dells[:,np.newaxis]
+        transfer[0,...] *= prefactor[:,np.newaxis]
 
     # both scalar and tensor have to be scaled with monopole in uK
     transfer *= 2.7255e6
