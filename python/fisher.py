@@ -17,6 +17,7 @@ import camb_tools as ct
 import pywigxjpf as wig
 from beamconv import instrument as instr
 import warnings
+import cProfile 
 from mpi4py import MPI
 
 opj = os.path.join
@@ -325,20 +326,13 @@ class PreCalc(instr.MPIBase):
             Left side of default bins from ell=2 to ell=1e4
         '''
         # bins used in Meerburg 2016
-#        bins_0 = np.arange(2, 101, 1)
         bins_0 = np.arange(2, 151, 1)        
-#        bins_1 = np.arange(110, 510, 10)
         bins_1a = np.arange(153, 203, 3)
         bins_1b = np.arange(206, 506, 6)
-#        bins_1c = np.arange(165, 500, 10)
-#        bins_1 = np.arange(160, 510, 10)
         bins_2 = np.arange(510, 2010, 10)
         bins_3 = np.arange(2020, 10000, 20)
-#        bins_3 = np.arange(2020, 10000, 40)
         bins = np.concatenate((bins_0, bins_1a, bins_1b,
                                bins_2, bins_3))
-#        bins = np.concatenate((bins_0, bins_1,
-#                               bins_2, bins_3))
 
         return bins
         
@@ -507,7 +501,7 @@ class PreCalc(instr.MPIBase):
         # calculate bins in parallel, split ell in outer loop
         ells_sub = ells[self.mpi_rank::self.mpi_size]
 
-        # create an ell -> bin idx lookup table for 2nd loop
+        # create an ell -> bin idx lookup table
         idx = np.digitize(ells, bins, right=False) - 1
         # boolean index array for inner loop determining good ell3
         ba = np.ones(ells.size, dtype=bool)
@@ -833,17 +827,20 @@ class PreCalc(instr.MPIBase):
 
         self.pol_trpl = pol_trpl
 
+    # add function that reads in precomputed beta
+
     def beta(self, func=None, L_range=[-2, -1, 0, 1, 2], radii=None, bin=True,
-             optimize=True, verbose=False):
+             optimize=True, interp_factor=None, verbose=False):
         '''
         Calculate beta_l,L(r) = 2/pi * \int k^2 dk f(k) j_L(kr) T_X,l^(Z)(k).
         Vectorized. MPI'd by radius.
 
         Keyword Arguments
         -----------------
-        func : array-like
+        func : array-like, str
             Factor f(k) of (primordial) factorized shape function.
-            Can be of shape (nfact, 3, k.size) If None, use local
+            Can be of shape (nfact, 3, k.size). If string, choose
+            "local", "equilateral", "orthogonal". If None, uses local
             (default : None)
         radii : array-like
             Array with radii to compute. In units [Mpc], if None,
@@ -857,6 +854,9 @@ class PreCalc(instr.MPIBase):
         optimize : bool
             Do no calculate spherical bessel for kr << L (default : 
             True)
+        interp_factor : int, None
+            Factor of extra point in k-dimension of tranfer function
+            calculated by cubic interpolation.
         verbose : bool
             Print progress (default : False)
         '''
@@ -875,8 +875,32 @@ class PreCalc(instr.MPIBase):
             raise ValueError("L_range is not monotonically increasing "+
                              "with steps of 1")
             
-        if func is None:
-            func, _ = self.local()
+        k = self.depo['scalar']['k']
+            
+        if interp_factor is not None:
+            if interp_factor % 1 != 0:
+                raise ValueError("interp_factor has to be integer.")
+            interp_factor = int(interp_factor)
+
+            if self.mpi_rank == 0 and verbose:
+                print("Interpolating beta k integral by factor "
+                      "{} ...".format(interp_factor))
+            # Determine new k array.
+            k_interp = np.zeros(k.size * interp_factor)
+            for i in xrange(interp_factor):
+                k_interp[i::interp_factor] = k
+            conv_window = np.ones(interp_factor) / float(interp_factor)
+            k_interp = convolve(k_interp, conv_window, mode='valid')
+            k_old = k
+            k_old_size = k.size
+            k = k_interp
+
+        if func is None or func == 'local':
+            func, _ = self.local(k=k)
+        elif func == 'equilateral':
+            func, _ = self.equilateral(k=k)
+        elif func == 'orthogonal':
+            func, _ = self.orthogonal(k=k)
 
         # you want to allow f to be of shape (nfact, 3, k.size)
         ndim = func.ndim
@@ -889,17 +913,16 @@ class PreCalc(instr.MPIBase):
         else:
             raise ValueError('dimension {} of func not supported'.format(ndim))
 
+        if k.size != func.shape[2]:
+            raise ValueError('func and k not compatible: {}, {}'.format(
+                    func.shape, k.shape))
+
         nfact = func.shape[0]
         ks = func.shape[1]
 
         if radii is None:
             radii = self.get_updated_radii()
         self.depo['radii'] = radii
-
-        k = self.depo['scalar']['k']
-        if k.size != func.shape[2]:
-            raise ValueError('func and k not compatible: {}, {}'.format(
-                    func.shape, k.shape))
 
         # scale func by k^2
         k2 = k**2
@@ -924,7 +947,6 @@ class PreCalc(instr.MPIBase):
             radii_per_rank.append(radii[rank::self.mpi_size])
 
         # beta scalar and tensor
-        # Note, 
         beta_s = np.zeros((ells.size,L_range.size,nfact,ks,
                            len(pols_s), radii_sub.size))
         beta_t = np.zeros((ells.size,L_range.size,nfact,ks,
@@ -943,13 +965,28 @@ class PreCalc(instr.MPIBase):
             kr_idx = np.digitize(ells_ext, bins=kr, right=True) 
             kr_idx[kr_idx == kr.size] = kr.size - 1 # fix last element
 
+            if interp_factor is not None:
+                # Same for original k array
+                kr_old = k_old * radius
+                kr_old_idx = np.digitize(ells_ext, bins=kr_old, right=True) 
+                kr_old_idx[kr_old_idx == kr_old.size] = kr_old.size - 1 
+                
+#            print(kr_old.size)
+#            print(kr.size)
+#            print(kr_old)
+#            print(k_old)
+#            print(k)
+#            print(ells_ext)
+#            print(kr_old_idx)
+#            print(kr_idx)
+#            exit()
+
             if self.mpi_rank == 0 and verbose:
                 print('rank: {}, ridx: {}/{}, radius: {} Mpc'.format(
                     self.mpi_rank, ridx, radii_sub.size - 1, radius))
 
             ell_prev = ells[0] - 1
             for lidx, ell in enumerate(ells):
-
                 for Lidx, L in enumerate(L_range):
                     L = ell + L
                     if L < 0:
@@ -971,6 +1008,28 @@ class PreCalc(instr.MPIBase):
                     else:
                         kmin_idx = 0
 
+                    if interp_factor is not None and optimize:
+                        interp = True
+
+                        if L < 20:
+                            kmin_old_idx = 0
+                        elif L < 100:
+                            kmin_old_idx = kr_old_idx[int(0.5 * L)]
+                        elif L < 500:
+                            kmin_old_idx = kr_old_idx[int(0.75 * L)]
+                        elif L < 1000:
+                            kmin_old_idx = kr_old_idx[int(0.8 * L)]
+                        else:
+                            kmin_old_idx = kr_old_idx[int(0.9 * L)]
+                            
+                        if kmin_old_idx == k_old_size - 1:
+                            kmin_old_idx -= 1
+                            # Integral over k is over single k,
+                            # cannot interpolate.
+                            # interp = True
+                    else:
+                        kmin_old_idx = 0
+                        
                     # If possible, reuse spherical bessels j_L from ell-1
                     # in case these ells are not full-sized, dont do it                    
                     if lidx == 0 or ell - 1 != ell_prev:
@@ -984,21 +1043,31 @@ class PreCalc(instr.MPIBase):
 
                     # loop over T, E, B
                     for pidx, pol in enumerate(pols_t):
-
+                        
                         if pol != 'B':
-                            # note: this assumes no B contribution to scalar
-                            # i.e. no lensing Cl^BB
-                            tmp_s[kmin_idx:] = transfer_s[pidx,lidx,kmin_idx:] 
+                            # This assumes no B contribution to scalar
+                            if interp:
+                                cs = CubicSpline(k_old[kmin_old_idx:],
+                                         transfer_s[pidx,lidx,kmin_old_idx:])
+                                tmp_s[kmin_idx:] = cs(k[kmin_idx:])
+                            else:
+                                tmp_s[kmin_idx:] = transfer_s[pidx,lidx,kmin_idx:]
+
                             tmp_s[kmin_idx:] *= jL[Lidx,kmin_idx:]
 
-                        tmp_t[kmin_idx:] = transfer_t[pidx,lidx,kmin_idx:]
+                        # Tensor.
+                        if interp:
+                            cs = CubicSpline(k_old[kmin_old_idx:], 
+                                     transfer_t[pidx,lidx,kmin_old_idx:])
+                            tmp_t[kmin_idx:] = cs(k[kmin_idx:])
+                        else:
+                            tmp_t[kmin_idx:] = transfer_t[pidx,lidx,kmin_idx:]
                         tmp_t[kmin_idx:] *= jL[Lidx,kmin_idx:]
 
                         for nidx in xrange(nfact):
                             for kidx in xrange(ks):
 
                                 if pol != 'B':
-
                                     # scalars
                                     integrand_s = tmp_s[kmin_idx:] * \
                                         func[nidx,kidx,kmin_idx:]
@@ -1089,7 +1158,6 @@ class PreCalc(instr.MPIBase):
 
         # Bin beta
         bins = self.bins
-#        indices = np.digitize(ells, bins, right=False) - 1
 
         beta_s_f = np.asfortranarray(beta_s)
         beta_t_f = np.asfortranarray(beta_t)
@@ -1186,7 +1254,7 @@ class Template(PreCalc):
         # transfer functions don't depend on them        
         self.scalar_amp = 2.1e-9
         # NOTE (2pi)^3????
-#        self.common_amp = (2*np.pi)**3 * 16 * np.pi**4 * self.scalar_amp**2
+        # self.common_amp = (2*np.pi)**3 * 16 * np.pi**4 * self.scalar_amp**2
         # this is the amplitude in e.g. f(k1, k2, k3) = amp * local
         self.common_amp = 16 * np.pi**4 * self.scalar_amp**2
 
@@ -1196,10 +1264,17 @@ class Template(PreCalc):
         # load up template based on choice in init
         self.template = template
 
-    def local(self, fnl=1):
+    def local(self, k=None, fnl=1):
         '''
-        eq. 18 from Meerburg 2016 without the angular
-        dependent parts and I = local
+        Get the wavenumber arrays for the local template.
+
+        Keyword arguments
+        -----------------
+        k : array-like, None
+            Array of wavenumbers, if None try to use
+            internally stored values. (default : None)
+        fnl : float
+            (default : 1)
 
         Returns
         -------
@@ -1215,26 +1290,47 @@ class Template(PreCalc):
         -----        
         '''
 
-        ks = self.depo['scalar']['k']
+        if k is None:
+            k = self.depo['scalar']['k']
 
-        km3 = ks**-3
-        ones = np.ones(ks.size)
+        km3 = k**-3
+        ones = np.ones(k.size)
 
         template = np.asarray([km3, ones])
         amp = 2. * fnl
 
         return template, amp
 
-    def equilateral(self, fnl=1):
+    def equilateral(self, k=None, fnl=1):
         '''
-        
-        '''
-        ks = self.depo['scalar']['k']
+        Get the wavenumber arrays for the equilateral template.
 
-        km3 = ks**-3
-        km2 = ks**-2
-        km1 = ks**-1
-        ones = np.ones(ks.size)
+        Keyword arguments
+        -----------------
+        k : array-like, None
+            Array of wavenumbers, if None try to use
+            internally stored values. (default : None)
+        fnl : float
+            (default : 1)
+
+        Returns
+        -------
+        template : array-like
+            shape (2, k.size) used for beta (0), alpha (1).
+            For beta we simply have k^-3, for alpha
+            just an array of ones.
+        amp : float
+            scalar amplitude of bispectrum with equilateral
+            shape: = 6 * fnl
+        '''
+
+        if k is None:
+            k = self.depo['scalar']['k']
+
+        km3 = k**-3
+        km2 = k**-2
+        km1 = k**-1
+        ones = np.ones(k.size)
 
         # Keep same ordering as local.
         template = np.asarray([km3, ones, km2, km1])
@@ -1242,12 +1338,12 @@ class Template(PreCalc):
         
         return template, amp
 
-    def orthogonal(self, fnl=1):
+    def orthogonal(self, k=None, fnl=1):
         '''
-        Note, same as equil?
+        Note, same as equilateral.
         '''
         
-        return self.equilateral(fnl=fnl)
+        return self.equilateral(k=k, fnl=fnl)
 
 class Fisher(Template):
 
@@ -1332,7 +1428,6 @@ class Fisher(Template):
         trapz_loc = trapz
 
         bins_outer_f = bins.copy() # f = full
-#        # remove last bin
         idx_outer_f = np.arange(bins_outer_f.size)
 
         # scatter
@@ -1361,7 +1456,6 @@ class Fisher(Template):
         for idxb, (idx1, i1) in enumerate(zip(idx_outer, bins_outer)):
             # note, idxb is bins_outer index for bispectrum per rank
             # idx1 is index to full-sized bin array, i1 is bin
-#            print self.mpi_rank, idxb, idx1
             # load binned beta
             beta_s_l1 = beta_s[idx1,Lidx1,0,0,:,:] # (2,r.size)
             beta_t_l1 = beta_t[idx1,Lidx1,0,0,:,:] # (3,r.size)
@@ -1488,7 +1582,8 @@ class Fisher(Template):
                     else:
                         pass
 
-                    if ang_tss == 0. and ang_sts == 0. and ang_sst == 0. and ell1!=ell2!=ell3:
+                    if ang_tss == 0. and ang_sts == 0. and ang_sst == 0. \
+                       and ell1!=ell2!=ell3:
                         # wrong L,ell comb, determine what went wrong
                         print(ell1, ell2, ell3, L1, L2, L3, num)
                         print(ang_tss, ang_sts, ang_sst)
