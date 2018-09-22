@@ -311,7 +311,7 @@ def calc_fisher(lmin, lmax, out_dir, nls_tot, bispec,
             invcov2[:,tidx_a,tidx_b] = bin_invcov[:,ptrp_a2,ptrp_b2]
             invcov3[:,tidx_a,tidx_b] = bin_invcov[:,ptrp_a3,ptrp_b3]
 
-    # depending on lmin, start outer loop not at first bin
+    # Depending on lmin, start outer loop not at first bin.
     start_bidx = np.where(bins >= lmin)[0][0]
 
     # loop same loop as in binned_bispectrum
