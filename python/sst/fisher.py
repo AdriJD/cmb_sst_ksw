@@ -1,6 +1,6 @@
 '''
-Calculate elements of a Fisher matrix for a bispectrum analysis,
-add optimal estimator later on
+Calculate Fisher information and all needed quantities for a
+tensor-scalar-scalar bispectrum. 
 '''
 
 from __future__ import print_function
@@ -14,6 +14,7 @@ from scipy.stats import binned_statistic
 from scipy.interpolate import CubicSpline
 from scipy.signal import convolve
 import camb_tools as ct
+import tools
 import pywigxjpf as wig
 from beamconv import instrument as instr
 import warnings
@@ -21,6 +22,8 @@ import cProfile
 from mpi4py import MPI
 
 opj = os.path.join
+
+__all__ = ['PreCalc', 'Template', 'Fisher']
 
 class PreCalc(instr.MPIBase):
 
@@ -32,18 +35,16 @@ class PreCalc(instr.MPIBase):
         kwargs : {MPIBase_opts}
         '''
 
-        # TODO what goes in the depo and what does not?
+        # Precomputed quantities go in data dict to not pollute 
+        # the namespace too much.
         self.depo = {}
 
         self.depo['init_bins'] = False
 
-        # Extract kwargs for loading CAMB output, such that
-        # they do not get passed to MPIBase
-
         # init MPIBase 
         super(PreCalc, self).__init__(**kwargs)
 
-        # Initialize wigner tables for lmax=8000
+        # Initialize wigner tables for lmax=8000.
         wig.wig_table_init(2 * 8000, 9)
         wig.wig_temp_init(2 * 8000)
         
@@ -304,17 +305,6 @@ class PreCalc(instr.MPIBase):
         self.depo['radii'] = radii
         return radii
 
-    def init_beta(self, path, **kwargs):
-        '''
-        Load or compute beta (beta_s and beta_t)
-
-        Arguments
-        ---------
-        path : str
-            Path to beta files
-        '''
-        pass
-
     def get_default_bins(self):
         '''
         Return default bins 
@@ -340,63 +330,8 @@ class PreCalc(instr.MPIBase):
         bins = np.concatenate((bins_0, bins_1a, bins_1b,
                                bins_2, bins_3))
 
-
         return bins
         
-    def combine(self, a, b, c):
-        '''
-        Combine three int arrays into a single int array
-        by packing them bitwise. Only works for
-        non-negative ints < 16384
-        '''
-
-        # Do some checks because this is a scary function.
-        a = np.asarray(a)
-        b = np.asarray(b)
-        c = np.asarray(c)
-
-        if a.dtype != np.int64:
-            raise ValueError('a')
-
-        if b.dtype != np.int64:
-            raise ValueError('b')
-
-        if c.dtype != np.int64:
-            raise ValueError('c')
-        
-        if np.max(a) >= 16384 or np.any(a < 0):
-            raise ValueError('a')
-
-        if np.max(b) >= 16384 or np.any(b < 0):
-            raise ValueError('b')
-
-        if np.max(c) >= 16384 or np.any(c < 0):
-            raise ValueError('c')
-
-        # shift a 28 bits to the left, b 14
-        return (a << 28) | (b << 14) | c
-
-    def unpack(self, comb):
-        '''
-        Unpack int array into 3 arrays
-
-        comb: int, array-like
-        '''        
-
-        comb = np.asarray(comb)
-        if comb.dtype != np.int64:
-            raise ValueError('d')
-
-        # shift a 28 bits back to right
-        a = comb >> 28
-        # shift b 14 bits back to right 
-        # and set all above 16383 to zero (i.e. a)
-        b = (comb >> 14) & 16383
-        # set all above 16383 to zero (i.e. a and b)
-        c = (comb & 16383)
-
-        return a, b, c
-
     def init_bins(self, lmin=None, lmax=None,
                   bins=None, parity='odd',
                   verbose=False):
@@ -662,7 +597,7 @@ class PreCalc(instr.MPIBase):
                 # pack first pass bitwise
                 # this works because ells are nonnegative and relatively
                 # small
-                first_pass_packed = self.combine(first_pass[:,:,:,0],
+                first_pass_packed = tools.combine(first_pass[:,:,:,0],
                                                  first_pass[:,:,:,1],
                                                  first_pass[:,:,:,2])
                 
@@ -673,7 +608,7 @@ class PreCalc(instr.MPIBase):
                 self._comm.Allreduce(first_pass_packed, rec_first_pass,
                                      op=MPI.MIN)
                 # unpack 
-                rec_first_pass = np.stack(self.unpack(rec_first_pass), axis=3)
+                rec_first_pass = np.stack(tools.unpack(rec_first_pass), axis=3)
                 rec_first_pass[rec_first_pass == 16383] = 0 # is that what i did before?
 
                 self.barrier()
@@ -724,6 +659,9 @@ class PreCalc(instr.MPIBase):
                         first_pass[mask2,:] = first_pass_rec[mask2,:]
 
                 # broadcast full arrays to all ranks
+                # NOTE do you really want to do that?
+                # Why not keep them scattered?
+                
                 num_pass = self.broadcast_array(num_pass)
                 first_pass = self.broadcast_array(first_pass)
 
@@ -737,6 +675,13 @@ class PreCalc(instr.MPIBase):
         self.first_pass = first_pass
 
         self.depo['init_bins'] = True
+        self.depo['bins'] = bins
+
+        # Perhaps store bins_outer?
+
+        # NOTE write arrays to disk, check if scattered?
+        
+        
 
         if self.mpi_rank == 0 and verbose:
             print('...done')
@@ -1178,8 +1123,8 @@ class PreCalc(instr.MPIBase):
                                 b_int_t = trapz(integrand_t, k[kmin_idx:])
                                 beta_t[lidx_b,Lidx,nidx,kidx,pidx,ridx] = b_int_t
 
-                # permute rows such that oldest row can be replaced next ell
-                # no harm doing this even when ells are sparse, see above
+                # Permute rows such that oldest row can be replaced next ell
+                # no harm doing this even when ells are sparse, see above.
                 jL = np.roll(jL, -1, axis=0)
 
                 ell_prev = ell
@@ -1191,8 +1136,7 @@ class PreCalc(instr.MPIBase):
         beta_t *= (2 / np.pi)
         
         if sparse:
-            # Spline betas to full size in ell again
-
+            # Spline betas to full size in ell again.
             beta_s_full = np.zeros((ells_full.size, L_range.size, nfact,
                                     ks, len(pols_s), radii_sub.size))
             beta_t_full = np.zeros((ells_full.size, L_range.size, nfact,
@@ -1223,7 +1167,7 @@ class PreCalc(instr.MPIBase):
             ells = ells_full
 
         
-        # Combine all sub range betas on root if mpi
+        # Combine all sub range betas on root if mpi.
         if self.mpi:
             self.barrier()
 
@@ -1235,9 +1179,9 @@ class PreCalc(instr.MPIBase):
                 beta_t_full = np.zeros((ells.size, L_range.size, nfact,
                                         ks, len(pols_t), radii.size))
 
-                # already place root beta sub into beta_full
+                # Already place root beta sub into beta_full.
                 for ridx, radius in enumerate(radii_per_rank[0]):
-                    # find radius index in total radii
+                    # Find radius index in total radii.
                     ridx_tot, = np.where(radii == radius)[0]
                     beta_s_full[:,:,:,:,:,ridx_tot] = beta_s[:,:,:,:,:,ridx]
                     beta_t_full[:,:,:,:,:,ridx_tot] = beta_t[:,:,:,:,:,ridx]
@@ -1358,6 +1302,9 @@ class Template(PreCalc):
     '''
     Create arrays of shape (nfact, 3, k.size)
     '''
+
+    # Remove depo calls here. This class does not need
+    # to inheret from anything. 
 
     def __init__(self, template='local', **kwargs):
         '''
@@ -1481,17 +1428,56 @@ class Template(PreCalc):
 
 class Fisher(Template):
 
-    def __init__(self, **kwargs):
+    def __init__(self, base_dir, **kwargs):
         '''
-
+        
+        Arguments
+        ---------
+        base_dir : str
+            Working directory.
 
         Keyword Arguments
         -----------------
+        camb_opts
+        beta_opts
+        bin_opts
+        
         kwargs : {MPIBase_opts}
         
+
+        Notes
+        -----
+        >> F = Fisher()
+        >> F.compute_binned_bispec('local') # Precomputes beta et al.
+        >> fisher = F.interp_fisher()
+        >> Do stuff
+        >> F.compute_binned_bispec('equilateral')
+
         '''
 
+        if not os.path.exist(base_dir):
+            pass
+
         super(Fisher, self).__init__(**kwargs)
+
+        # require a working directory
+        # Option to specify precomputed files here.
+            # dict of filenames
+            # beta, num_bins, etc.
+            # beta needs to be stored with corresponding radii (perhaps same dir)
+        # otherwise look for dedault names in default places.
+        # checked for existence by 
+        # stored in depo (inhereted from precomp)
+        # once binned bispectrum is computed, stored with template id, parity, pols?
+
+
+        # Starting a new directory, you start a fisher instance.
+        # that creates directories and bins, beta, num_pass, etc all get stored
+        # bispectrum also gets stored
+        # you can then later on run the same thing, but precomputed stuff gets
+        # loaded into memory.
+
+
 
     def binned_bispectrum(self, DL1, DL2, DL3, prim_template='local'):
         '''
@@ -1504,10 +1490,10 @@ class Fisher(Template):
         DL3 : Delta L_3
 
         Returns
-        -------
-        
+        -------        
         binned_bispectrum : array-like 
-            Shape: (num_bins-1,num_bins-1,num_bins-1, pols)
+            Shape: (nbin, nbin, nbin, npol), where npol
+            is the number of polarization triplets considered.
         '''
 
         # loop over bins
@@ -1577,7 +1563,7 @@ class Fisher(Template):
         nbins = bins.size
         bispectrum = np.zeros((bins_outer.size, nbins, nbins, psize))
 
-        # numerical factors that difference equilateral and orthogonal
+        # numerical factors that differentiate equilateral and orthogonal
         if prim_template == 'equilateral':
             num_a = -1.
             num_b = -2.
@@ -1951,4 +1937,168 @@ class Fisher(Template):
         else:
             # no MPI, so process already has full bispectrum
             return bispectrum
+
+    def compute_binned_bispec(prim_template):
+        '''
+        Compute the combined binned bispectra from all
+        allowed L values.
+        
+        Arguments
+        ---------
+        prim_template : str
+            Primordial template. Either "local", "equilateral"
+            or "orthogonal".
+        
+        Keyword arguments
+        -----------------
+
+
+        Notes
+        -----
+        
+        '''
+
+        lmin = 2
+        lmax = 5000
+
+        opj = os.path.join
+        ana_dir = '/mn/stornext/d8/ITA/spider/adri/analysis/20171217_sst/'
+
+        camb_opts = dict(camb_out_dir = opj(ana_dir, 'camb_output/high_acy/sparse_5000'),
+                         tag='r0',
+                         lensed=False,
+                         high_ell=True)
+
+        F = fisher.Fisher()
+        F.get_camb_output(**camb_opts)
+        F.init_bins(lmin=lmin, lmax=lmax, 
+                    parity='odd', verbose=True)
+        F.init_wig3j()
+        bins = F.bins
+
+        radii = F.get_updated_radii()
+
+        if prim_template == 'local':
+            f, _ = F.local()
+        else:
+            f, _ = F.equilateral()
+
+        F.beta(f=f, radii=radii, verbose=True)
+        F.init_pol_triplets()
+        if F.mpi_rank  == 0:
+            print('done precalculating')
+
+        L_tups = [(+1, +1, +1),
+                  (+1, -1, -1),
+                  (-1, +1, +1),
+                  (-1, -1, -1),
+                  (+1, -1, +1),
+                  (-1, +1, -1)]
+
+        for Lidx, L_tup in enumerate(L_tups):
+
+            if F.mpi_rank == 0:
+                print('working on DL1, DL2, DL3:', L_tup)
+
+            if Lidx == 0:
+                B = F.binned_bispectrum(*L_tup, prim_template=prim_template)
+            else:
+                B += F.binned_bispectrum(*L_tup, prim_template=prim_template)
+
+        if F.mpi_rank  == 0:
+
+            np.save(opj(ana_dir, 'bispectrum/run_so', prim_template,
+                        'bispectrum.npy'), B)
+            np.save(opj(ana_dir, 'bispectrum/run_so', prim_template,
+                        'bins.npy'), F.bins)
+            np.save(opj(ana_dir, 'bispectrum/run_so', prim_template,
+                        'num_pass.npy'), F.num_pass)
+            np.save(opj(ana_dir, 'bispectrum/run_so', prim_template,
+                        'first_pass.npy'), F.first_pass)
+            np.save(opj(ana_dir, 'bispectrum/run_so', prim_template,
+                        'beta_s.npy'), F.depo['scalar']['b_beta'])
+            np.save(opj(ana_dir, 'bispectrum/run_so', prim_template,
+                        'beta_t.npy'), F.depo['tensor']['b_beta'])
+            np.save(opj(ana_dir, 'bispectrum/run_so', prim_template,
+                        'pol_trpl.npy'), F.pol_trpl)
+
+    def naive_fisher(self, lmin, lmax, out_dir, nls_tot, bispec,
+                     bins, num_pass, pol_trpl,
+                     prim_template='local',
+                     fsky=1, A_lens=1., plot_label=''):
+        '''
+        Calculate the fisher information by squaring bins.
+
+        Arguments
+        ---------
+        bispec : array-like
+            Binned bispectrum of shape (nbins, nbins, nbins, npol)
+        bins : array-like
+            Bins. Shape: (nbins)
+        num_pass : array-like
+            Number of allowed ell triplets in bin. 
+            Shape: (nbins, nbins, nbins)
+        pol_trpl : array-like
+            Polarization triplets for bispectrum. 
+            Shape: (npol, 3)
+        
+
+        Notes
+        -----
+        
+        '''
+            
+    def interp_fisher(self):
+        '''
+        
+        '''
+
+
+    def check_precomp(self, check_exists, ignore):
+        '''
+        Check whether required precomputed quantities
+        exist on disk or have to be (re)computed.
+        
+        arguments
+        -----------------
+        check_exists : array-like of strings
+            Precomputable quantities that are computed
+            when not found. Options:
+                "bins"
+                "num_pass"
+                "first_pass"
+                "pol_trpl"
+                "bispec"
+                "beta"
+                ""
+                ""
+                ""
+
+        Keyword arguments
+        -----------------
+        ignore : bool
+            Recompute regardless of existance of files.
+            (default : False)
+        recompute_sync : bool
+            Also recompute all quantities that come after 
+            recomputed quantity. (default : True)        
+        '''
+    
+        # Establish what base directory is
+        
+        # go over files in chronological order and check if they exist
+        # means that you need standard file names.
+        # make beta always include equilateral funcitons.
+        
+        for ffile in check_exists:
+            pass
+            # os path exist
+            # print('bla exists') or print('bla not found, recomputing..')
+            # or print('bla exists but recomputing anyway')
+        
+            # this means that from attributes all kwargs to all precompute 
+            # methods are available.
+
+
+
 
