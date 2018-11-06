@@ -38,8 +38,8 @@ def read_camb_output(source_dir, ttype='scalar', high_ell=False):
         Maximum multipole
     k : array-like
         array with wavenumbers in Mpc^-1
-    ell : array-like
-        Sparsely sampled ells array (only when high_ell is set)
+    ells : array-like
+        Multipoles used by CAMB (sparse when high_ell is set)
     '''
     
     if high_ell:
@@ -108,13 +108,8 @@ def read_camb_output(source_dir, ttype='scalar', high_ell=False):
     # let beta bin using sparse ells
     # but ideally, use full transfer for 2 <= ell <= 4000 part
 
-    if high_ell:
-        # also return ell, because it's non-trivial in this case
-        return transfer, lmax, k, ells
-
-    else:
-        return transfer, lmax, k
-
+    return transfer, lmax, k, ells
+    
 def get_spectra(source_dir, tag='', lensed=True, prim_type='tot'):
     '''
     Read camb output and return TT, EE, BB, TE spectra.

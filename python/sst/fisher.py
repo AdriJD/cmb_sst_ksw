@@ -1,25 +1,28 @@
 '''
 Calculate Fisher information and all needed quantities for a
-tensor-scalar-scalar bispectrum. 
+tensor-scalar-scalar bispectrum.
 '''
 
 from __future__ import print_function
 import sys
 import os
 import numpy as np
+import pickle
+import warnings
+import cProfile
+from mpi4py import MPI
+
 from scipy.special import spherical_jn
 from scipy.integrate import trapz
 from scipy.linalg import inv
 from scipy.stats import binned_statistic
 from scipy.interpolate import CubicSpline
 from scipy.signal import convolve
+
 import camb_tools as ct
 import tools
 import pywigxjpf as wig
 from beamconv import instrument as instr
-import warnings
-import cProfile 
-from mpi4py import MPI
 
 opj = os.path.join
 
@@ -35,29 +38,32 @@ class PreCalc(instr.MPIBase):
         kwargs : {MPIBase_opts}
         '''
 
-        # Precomputed quantities go in data dict to not pollute 
+        # Precomputed quantities go in dictionaries to not pollute
         # the namespace too much.
         self.depo = {}
+        self.bins = {}
+        self.beta = {}
+        self.bispec = {}
 
-        self.depo['init_bins'] = False
+        self.bins['init_bins'] = False
 
-        # init MPIBase 
+        # init MPIBase
         super(PreCalc, self).__init__(**kwargs)
 
         # Initialize wigner tables for lmax=8000.
         wig.wig_table_init(2 * 8000, 9)
         wig.wig_temp_init(2 * 8000)
-        
-    def get_camb_output(self, camb_out_dir='.', high_ell=False, 
+
+    def get_camb_output(self, camb_out_dir='.', high_ell=False,
                         interp_factor=None, **kwargs):
         '''
         Store CAMB ouput (transfer functions and Cls) and store
-        in internal dictionaries. 
+        in internal dictionaries.
 
         Keyword Arguments
         -----------------
         camb_out_dir : str
-            Path to folder containing CAMB output. 
+            Path to folder containing CAMB output.
             (default : '.')
         high_ell : boool
             If True, load up additional transfer functions for high
@@ -96,7 +102,7 @@ class PreCalc(instr.MPIBase):
         for ttype in ['scalar', 'tensor']:
 
             if self.mpi_rank == 0:
-                tr, lmax, k = ct.read_camb_output(source_dir,
+                tr, lmax, k, ells = ct.read_camb_output(source_dir,
                                                   ttype=ttype)
 
                 if high_ell:
@@ -114,9 +120,9 @@ class PreCalc(instr.MPIBase):
                     # create ells that combines low and high
                     ells = np.concatenate((np.arange(2, lmax+1),
                                            ells_hl[lidx_min_hl:]))
-                    
+
                     # index where sparse part starts in full ells array
-                    lidx_min = np.where(ells > lmax)[0][0] 
+                    lidx_min = np.where(ells > lmax)[0][0]
                     assert ells[lidx_min] == ells_hl[lidx_min_hl]
 
                     # allocate combined transfer
@@ -148,9 +154,7 @@ class PreCalc(instr.MPIBase):
             tr = self.broadcast_array(tr)
             k = self.broadcast_array(k)
             lmax = self.broadcast(lmax)
-
-            if high_ell:
-                ells = self.broadcast_array(ells)
+            ells = self.broadcast_array(ells)
 
             if interp_factor is not None:
                 if interp_factor % 1 != 0:
@@ -166,13 +170,13 @@ class PreCalc(instr.MPIBase):
                     k_interp[i::interp_factor] = k
                 conv_window = np.ones(interp_factor) / float(interp_factor)
                 k_interp = convolve(k_interp, conv_window, mode='valid')
-                
+
                 # Allocate new transfer function.
                 num_s = tr.shape[0]
                 num_ells = tr.shape[1]
                 tr_interp = np.zeros((num_s,num_ells,k_interp.size))
 
-                for nsidx in xrange(num_s):                    
+                for nsidx in xrange(num_s):
                     for lidx in xrange(num_ells):
 
                         if self.mpi_rank == 0:
@@ -183,7 +187,7 @@ class PreCalc(instr.MPIBase):
                         tr_interp[nsidx,lidx,:] = cs(k_interp)
 
                 tr = tr_interp
-                k = k_interp                
+                k = k_interp
 
                 if self.mpi_rank == 0:
                     print("...done")
@@ -191,16 +195,16 @@ class PreCalc(instr.MPIBase):
             self.depo[ttype] = {'transfer' : tr,
                                 'lmax' : lmax,
                                 'k' : k,
-                                'ells_sparse' : ells} # None normally
+                                'ells_camb' : ells}
 
-        # make sure tensor and scalar ks are equal (not 
-        # guaranteed by CAMB). Needed b/c both T and S 
+        # make sure tensor and scalar ks are equal (not
+        # guaranteed by CAMB). Needed b/c both T and S
         # transfer functions are integrated over same k
         # when calculating beta
         ks = self.depo['scalar']['k']
         kt = self.depo['tensor']['k']
 
-        np.testing.assert_allclose(ks, kt)        
+        np.testing.assert_allclose(ks, kt)
 
     def get_noise_curves(self, cross_noise=False, **kwargs):
         '''
@@ -215,7 +219,7 @@ class PreCalc(instr.MPIBase):
         tt_file : str
             Path to TT file
         pol_file : str
-            Path to EE, BB file            
+            Path to EE, BB file
         '''
 
         nls = None
@@ -225,10 +229,10 @@ class PreCalc(instr.MPIBase):
         if self.mpi_rank == 0:
 
             if kwargs.get('sat_file'):
-                
+
                 ell_tt, nl_tt, ell_pol, nl_ee, nl_bb, nl_sat, ell_sat = ct.get_so_noise(
                     **kwargs)
-            
+
             ell_tt, nl_tt, ell_pol, nl_ee, nl_bb = ct.get_so_noise(
                                                            **kwargs)
 
@@ -254,7 +258,7 @@ class PreCalc(instr.MPIBase):
             nls = np.ones((6, ell_pol.size))
             nls[0] = nl_tt
             nls[1] = nl_ee
-            nls[2] = nl_bb 
+            nls[2] = nl_bb
 
             if cross_noise:
                 nls[3] = np.sqrt(nl_tt * nl_ee)
@@ -285,7 +289,7 @@ class PreCalc(instr.MPIBase):
 
         radii = np.concatenate((low, re1, re2, rec))
 
-        self.depo['radii'] = radii
+#        self.beta['radii'] = radii
         return radii
 
     def get_updated_radii(self):
@@ -302,12 +306,12 @@ class PreCalc(instr.MPIBase):
 
         radii = np.concatenate((low, re1, re2, rec, rec_new, rec_extra))
 
-        self.depo['radii'] = radii
+#        self.beta['radii'] = radii
         return radii
 
     def get_default_bins(self):
         '''
-        Return default bins 
+        Return default bins
 
         Returns
         -------
@@ -315,13 +319,13 @@ class PreCalc(instr.MPIBase):
             Left side of default bins from ell=2 to ell=1e4
         '''
         # bins used in Meerburg 2016
-#        bins_0 = np.arange(2, 151, 1)        
-#        bins_1a = np.arange(153, 203, 3)
-#        bins_1b = np.arange(206, 506, 6)
-#        bins_2 = np.arange(510, 2010, 10)
-#        bins_3 = np.arange(2020, 10000, 20)
+        # bins_0 = np.arange(2, 151, 1)
+        # bins_1a = np.arange(153, 203, 3)
+        # bins_1b = np.arange(206, 506, 6)
+        # bins_2 = np.arange(510, 2010, 10)
+        # bins_3 = np.arange(2020, 10000, 20)
 
-        bins_0 = np.arange(2, 51, 1)        
+        bins_0 = np.arange(2, 51, 1)
         bins_1a = np.arange(54, 204, 4)
         bins_1b = np.arange(212, 512, 12)
         bins_2 = np.arange(524, 2024, 24)
@@ -331,7 +335,7 @@ class PreCalc(instr.MPIBase):
                                bins_2, bins_3))
 
         return bins
-        
+
     def init_bins(self, lmin=None, lmax=None,
                   bins=None, parity='odd',
                   verbose=False):
@@ -367,7 +371,7 @@ class PreCalc(instr.MPIBase):
             Left (lower) side of bins used in rest of code
         num_pass : array-like
             number of tuples per 3d bin that pass triangle
-            condition. 
+            condition.
             SIGMAi1i2i3 in bucher 2015.
             Shape : (nbins, nbins, nbins).
         first_pass : array-like
@@ -378,8 +382,8 @@ class PreCalc(instr.MPIBase):
             precompute Wigner 3j's for values that are used.
         '''
 
-        # store parity
-        self.depo['parity'] = parity
+        # Store parity. NOTE, really even or odd ell sum 
+        self.bins['parity'] = parity
 
         # If needed, extract lmin, lmax from provided bins
         if bins is not None:
@@ -397,10 +401,15 @@ class PreCalc(instr.MPIBase):
         if lmax <= lmin:
             raise ValueError('lmax <= lmin')
 
-        self.lmax = lmax
-        self.lmin = lmin
+        self.bins['lmax'] = lmax
+        self.bins['lmin'] = lmin
         ells = np.arange(lmin, lmax+1)
-        self.ells = ells
+        self.bins['ells'] = ells
+
+#        self.lmax = lmax
+#        self.lmin = lmin
+#        ells = np.arange(lmin, lmax+1)
+#        self.ells = ells
 
         if bins is None:
             bins = self.get_default_bins()
@@ -415,14 +424,14 @@ class PreCalc(instr.MPIBase):
             else:
                 raise ValueError('lmin or lmax is larger than max bin')
 
-        # Note: we include bin that contains lmax, num_pass takes care of 
+        # Note: we include bin that contains lmax, num_pass takes care of
         # partial bin.
         bins = bins[min_bidx:max_bidx]
 
         # check for monotonic order and no repeating values.
         np.testing.assert_array_equal(np.unique(bins), bins)
 
-        self.bins = bins
+        self.bins['bins'] = bins
         idx = np.arange(bins.size) # indices to bins
         num_bins = bins.size
 
@@ -445,14 +454,14 @@ class PreCalc(instr.MPIBase):
         num_pass = np.zeros((bins_sub.size, num_bins, num_bins),
                             dtype=int)
         # allocate space for first good tuple per 3d bin
-        first_pass = np.zeros((bins_sub.size, num_bins, num_bins, 3), 
+        first_pass = np.zeros((bins_sub.size, num_bins, num_bins, 3),
                               dtype=int)
 
         for idx1, idx1_full in enumerate(idx_sub):
             # Note, idx1 is index to this ranks bin arrays only.
             # idx1_full = index to full bins array.
             bin1 = bins[idx1_full]
-            
+
             if self.mpi_rank == 0 and verbose:
                 sys.stdout.write('\r'+'bidx: {}/{}'.format(idx1, idx_sub.size-1))
 
@@ -470,7 +479,7 @@ class PreCalc(instr.MPIBase):
                 except IndexError:
                     # We are in last bin, use lmax.
                     lmax2 = lmax
-                                
+
                 for idx3, idx3_full in enumerate(idx[idx2_full:]):
                     bin3 = bins[idx3_full]
 
@@ -483,10 +492,10 @@ class PreCalc(instr.MPIBase):
                     # Exclude triangle.
                     if bin3 > (lmax1 + lmax2):
                         break
-                    
+
                     for ell1 in xrange(bin1, lmax1+1):
                         for ell2 in xrange(max(ell1, bin2), lmax2+1):
-                            
+
                             ells3 = np.arange(max(ell2, bin3), lmax3+1)
                             ba = np.ones(ells3.size, dtype=bool)
 
@@ -529,7 +538,7 @@ class PreCalc(instr.MPIBase):
             method2 = False
 
             if method0:
-                
+
                 if self.mpi_rank == 0 and verbose:
                     print('...done, gathering bins from all ranks...')
 
@@ -537,7 +546,7 @@ class PreCalc(instr.MPIBase):
                 if self.mpi_rank == 0:
                     num_pass_rec = np.empty((num_bins, num_bins, num_bins),
                                             dtype=int)
-                    first_pass_rec = np.empty((num_bins, num_bins, num_bins, 3), 
+                    first_pass_rec = np.empty((num_bins, num_bins, num_bins, 3),
                                               dtype=int)
 
                     # Fill with arrays on root.
@@ -574,7 +583,7 @@ class PreCalc(instr.MPIBase):
 
                         num_pass_rec[rank::self.mpi_size] = num_pass_rec_cont
                         first_pass_rec[rank::self.mpi_size] = first_pass_rec_cont
-                        
+
                 if self.mpi_rank == 0:
                     num_pass = num_pass_rec
                     first_pass = first_pass_rec
@@ -585,7 +594,7 @@ class PreCalc(instr.MPIBase):
             elif method1:
                 # use mpi allreduce to sum num_pass
                 # and take the min value of first_pass (modified to have no zeros)
-                
+
                 if self.mpi_rank == 0 and verbose:
                     print('...done, gathering bins from all ranks...')
 
@@ -600,14 +609,14 @@ class PreCalc(instr.MPIBase):
                 first_pass_packed = tools.combine(first_pass[:,:,:,0],
                                                  first_pass[:,:,:,1],
                                                  first_pass[:,:,:,2])
-                
+
                 self._comm.Allreduce(num_pass, rec_num_pass, op=MPI.SUM)
                 # also use allreduce but only take minimum value of packed array
-                # works because l1 <= l2 <= l3, so it correctly picks out the 
+                # works because l1 <= l2 <= l3, so it correctly picks out the
                 # lowest sum tuple (
                 self._comm.Allreduce(first_pass_packed, rec_first_pass,
                                      op=MPI.MIN)
-                # unpack 
+                # unpack
                 rec_first_pass = np.stack(tools.unpack(rec_first_pass), axis=3)
                 rec_first_pass[rec_first_pass == 16383] = 0 # is that what i did before?
 
@@ -640,7 +649,7 @@ class PreCalc(instr.MPIBase):
 
                     if self.mpi_rank == 0:
                         self._comm.Recv(num_pass_rec, source=rank, tag=rank)
-                        self._comm.Recv(first_pass_rec, source=rank, 
+                        self._comm.Recv(first_pass_rec, source=rank,
                                         tag=rank + self.mpi_size)
                         print(self.mpi_rank, 'root received')
 
@@ -661,7 +670,7 @@ class PreCalc(instr.MPIBase):
                 # broadcast full arrays to all ranks
                 # NOTE do you really want to do that?
                 # Why not keep them scattered?
-                
+
                 num_pass = self.broadcast_array(num_pass)
                 first_pass = self.broadcast_array(first_pass)
 
@@ -669,19 +678,19 @@ class PreCalc(instr.MPIBase):
 
         if self.mpi_rank == 0:
             # trim away the zeros in first_pass
-            self.unique_ells = np.unique(first_pass)[1:]
+            self.bins['unique_ells'] = np.unique(first_pass)[1:]
 
-        self.num_pass = num_pass
-        self.first_pass = first_pass
+        self.bins['num_pass'] = num_pass # No. of good triplets per bin.
+        self.bins['first_pass'] = first_pass # Lowest good triplet per bin.
 
-        self.depo['init_bins'] = True
-        self.depo['bins'] = bins
+        self.bins['init_bins'] = True
+        self.bins['bins'] = bins
 
         # Perhaps store bins_outer?
 
         # NOTE write arrays to disk, check if scattered?
-        
-        
+
+
 
         if self.mpi_rank == 0 and verbose:
             print('...done')
@@ -693,11 +702,11 @@ class PreCalc(instr.MPIBase):
 
         Keyword Arguments
         -----------------
-        bins : array-like            
+        bins : array-like
         ells : array-like
             lmax >= bins[-1]
         nls_tot : array-like
-            Total covariance (Cl + Nl). Shape: (6, ells.size) in 
+            Total covariance (Cl + Nl). Shape: (6, ells.size) in
             order: TT, EE, BB, TE, TB, EB
 
         Notes
@@ -706,10 +715,10 @@ class PreCalc(instr.MPIBase):
         '''
 
         if ells is None:
-            ells = self.ells
+            ells = self.bins['ells']
 
         if bins is None:
-            bins = self.bins        
+            bins = self.bins['bins']
 
         if not np.array_equal(ells, np.unique(ells)):
             raise ValueError('ells not monotonically increasing with Dl=1')
@@ -723,7 +732,7 @@ class PreCalc(instr.MPIBase):
         lmax = ells[-1]
 
         if nls_tot is None:
-            
+
             # get signal and noise from depo
             # eventually remove this probably
             cls = self.depo['cls'] # Signal, lmin = 2
@@ -736,7 +745,7 @@ class PreCalc(instr.MPIBase):
             # assume nls start at lmin, cls at ell=2
             # NOTE, for new noise, noise also starts at ell=2 ?
             nls = nls[:,:(lmax - lmin + 1)]
-            cls = cls[:,lmin-2:lmax-1] 
+            cls = cls[:,lmin-2:lmax-1]
 
             # Add signal cov to noise (cls for TB and TE not present in cls)
             nls[:4,:] += cls
@@ -755,7 +764,7 @@ class PreCalc(instr.MPIBase):
         bins_ext = np.empty(bins.size + 1, dtype=float)
         bins_ext[:-1] = bins
         bins_ext[-1] = lmax + 0.1
-        
+
         for pidx1, pol1 in enumerate(['T', 'E', 'B']):
             for pidx2, pol2 in enumerate(['T', 'E', 'B']):
 
@@ -795,8 +804,8 @@ class PreCalc(instr.MPIBase):
         only values in unique_ells are calculated.
         '''
 
-        u_ells = self.unique_ells
-        ells = self.ells
+        u_ells = self.bins['unique_ells']
+        ells = self.bins['ells']
 
         lmin = ells[0]
 
@@ -826,40 +835,12 @@ class PreCalc(instr.MPIBase):
 
                 wig_t[lidx,Lidx] = tmp
 
-        self.wig_s = wig_s
-        self.wig_t = wig_t
-
-    def init_pol_triplets(self):
-        '''
-        Store polarization triples internally in (..,3) shaped array.
-
-        For now, only triplets containing a single B-mode.
-
-        Notes
-        -----
-        I = 0, E = 1, B = 2
-        '''
-
-        pol_trpl = np.zeros((12, 3), dtype=int)
-
-        pol_trpl[0] = 0, 0, 2
-        pol_trpl[1] = 0, 2, 0
-        pol_trpl[2] = 2, 0, 0
-        pol_trpl[3] = 1, 0, 2
-        pol_trpl[4] = 1, 2, 0
-        pol_trpl[5] = 2, 1, 0
-        pol_trpl[6] = 0, 1, 2
-        pol_trpl[7] = 0, 2, 1
-        pol_trpl[8] = 2, 0, 1
-        pol_trpl[9] = 1, 1, 2
-        pol_trpl[10] = 1, 2, 1
-        pol_trpl[11] = 2, 1, 1
-
-        self.pol_trpl = pol_trpl
+        self.bispec['wig_s'] = wig_s
+        self.bispec['wig_t'] = wig_t
 
     # add function that reads in precomputed beta
 
-    def beta(self, func=None, L_range=[-2, -1, 0, 1, 2], radii=None, bin=True,
+    def init_beta(self, func=None, L_range=[-2, -1, 0, 1, 2], radii=None, bin=True,
              optimize=True, interp_factor=None, sparse=True, verbose=False):
         '''
         Calculate beta_l,L(r) = 2/pi * \int k^2 dk f(k) j_L(kr) T_X,l^(Z)(k).
@@ -877,50 +858,51 @@ class PreCalc(instr.MPIBase):
             use default_radii (default : None)
         L_range : array-like, int
             Possible deviations from ell, e.g. [-2, -1, 0, 1, 2].
-            Must be monotonically increasing with steps of 1. 
+            Must be monotonically increasing with steps of 1.
             (default : [0])
         bin : bool
             Bin the resulting beta in ell. (default : True)
         optimize : bool
-            Do no calculate spherical bessel for kr << L (default : 
+            Do no calculate spherical bessel for kr << L (default :
             True)
         interp_factor : int, None
             Factor of extra point in k-dimension of tranfer function
             calculated by cubic interpolation.
         sparse : bool
-            Calculate beta over multipoles given by bins, then 
+            Calculate beta over multipoles given by bins, then
             interpolate. (default : True)
         verbose : bool
             Print progress (default : False)
         '''
 
-        if not self.depo['init_bins']:
+        if not self.bins['init_bins']:
             raise ValueError('bins not initialized')
 
-        if self.depo['scalar']['ells_sparse'] is not None:
-            # In this case, transfer function uses these mulipoles.
-            ells = self.depo['scalar']['ells_sparse']
-        else:
-            ells = self.ells
+        ells = self.depo['scalar']['ells_camb']
+#            # In this case, transfer function uses these mulipoles.
+#            ells = self.depo['scalar']['ells_sparse']
+#        else:
+#            ells = self.ells
 
-        if sparse:     
+        if sparse:
             # Use bins as ells.
             # Mapping from bin to lidx to access transfer correctly.
-            bins = self.bins
+            bins = self.bins['bins']
             # This assumes bins[-1] <= ells[-1] which should always be true.
             # Use idxmap[bidx] = lidx
             idxmap = np.digitize(bins, bins=ells, right=True)
             ells_full = ells
             ells = bins
-            
+
         L_range = np.asarray(L_range)
         if np.any(~(L_range == np.unique(L_range))):
             print("L_range: ", L_range)
             raise ValueError("L_range is not monotonically increasing "+
                              "with steps of 1")
-            
+
+        self.beta['L_range'] = L_range
         k = self.depo['scalar']['k']
-            
+
         if interp_factor is not None:
             if interp_factor % 1 != 0:
                 raise ValueError("interp_factor has to be integer.")
@@ -940,13 +922,20 @@ class PreCalc(instr.MPIBase):
             k = k_interp
 
         if func is None or func == 'local':
-            func, _ = self.local(k=k)
+            func, _ = self.local(k)
+            fname = 'local'
         elif func == 'equilateral':
-            func, _ = self.equilateral(k=k)
+            func, _ = self.equilateral(k)
+            fname = 'equilateral'
         elif func == 'orthogonal':
-            func, _ = self.orthogonal(k=k)
+            func, _ = self.orthogonal(k)
+            fname = 'orthogonal'
 
-        # you want to allow f to be of shape (nfact, 3, k.size)
+        self.beta['template'] = fname
+        self.beta['func'] = func
+
+        # You want to allow f to be of shape (nfact, ks, k.size). ks are number
+        # of k arrays, i.e. 2 for local, 4 for equilateral.
         ndim = func.ndim
         if ndim == 3:
             func = func.copy()
@@ -966,12 +955,12 @@ class PreCalc(instr.MPIBase):
 
         if radii is None:
             radii = self.get_updated_radii()
-        self.depo['radii'] = radii
+        self.beta['radii'] = radii
 
         # scale func by k^2
         k2 = k**2
         func *= k2
-        
+
         # allocate arrays for integral over k
         tmp_s = np.zeros_like(k)
         tmp_t = np.zeros_like(k)
@@ -1003,21 +992,21 @@ class PreCalc(instr.MPIBase):
         ells_ext = np.arange(ells[-1] + L_range[-1] + 1)
 
         for ridx, radius in enumerate(radii_sub):
-
+            print(radius)
             kr = k * radius
             # Array that gives L -> kr idx mapping, i.e. in which kr sits ell
-            kr_idx = np.digitize(ells_ext, bins=kr, right=True) 
+            kr_idx = np.digitize(ells_ext, bins=kr, right=True)
             kr_idx[kr_idx == kr.size] = kr.size - 1 # fix last element
 
             if interp_factor is not None:
                 interp = True
                 # Same for original k array
                 kr_old = k_old * radius
-                kr_old_idx = np.digitize(ells_ext, bins=kr_old, right=True) 
-                kr_old_idx[kr_old_idx == kr_old.size] = kr_old.size - 1 
+                kr_old_idx = np.digitize(ells_ext, bins=kr_old, right=True)
+                kr_old_idx[kr_old_idx == kr_old.size] = kr_old.size - 1
             else:
                 interp = False
-                
+
             if self.mpi_rank == 0 and verbose:
                 print('rank: {}, ridx: {}/{}, radius: {} Mpc'.format(
                     self.mpi_rank, ridx, radii_sub.size - 1, radius))
@@ -1029,10 +1018,10 @@ class PreCalc(instr.MPIBase):
                 # ells is possible bins, so map lidx_b to multipole index
                 # of transfer function.
                 # Otherwise lidx_b should just be lidx.
-                lidx = idxmap[lidx_b] 
+                lidx = idxmap[lidx_b]
 
                 if self.mpi_rank == 0 and verbose:
-                    sys.stdout.write('\r'+'lidx: {}/{}'.format(lidx, 
+                    sys.stdout.write('\r'+'lidx: {}/{}'.format(lidx,
                                                                ells_full_size-1))
                 for Lidx, L in enumerate(L_range):
                     L = ell + L
@@ -1067,14 +1056,14 @@ class PreCalc(instr.MPIBase):
                             kmin_old_idx = kr_old_idx[int(0.8 * L)]
                         else:
                             kmin_old_idx = kr_old_idx[int(0.9 * L)]
-                            
+
                         if kmin_old_idx == k_old_size - 1:
                             kmin_old_idx -= 1
                     else:
                         kmin_old_idx = 0
-                        
+
                     # If possible, reuse spherical bessels j_L from ell-1
-                    # in case these ells are not full-sized, dont do it                    
+                    # in case these ells are not full-sized, dont do it
                     if lidx == 0 or ell - 1 != ell_prev:
                         # first pass, or sparse ells: fill all
                         jL[Lidx,kmin_idx:] = spherical_jn(L, kr[kmin_idx:])
@@ -1086,7 +1075,7 @@ class PreCalc(instr.MPIBase):
 
                     # loop over T, E, B
                     for pidx, pol in enumerate(pols_t):
-                        
+
                         if pol != 'B':
                             # This assumes no B contribution to scalar
                             if interp:
@@ -1100,7 +1089,7 @@ class PreCalc(instr.MPIBase):
 
                         # Tensor.
                         if interp:
-                            cs = CubicSpline(k_old[kmin_old_idx:], 
+                            cs = CubicSpline(k_old[kmin_old_idx:],
                                      transfer_t[pidx,lidx,kmin_old_idx:])
                             tmp_t[kmin_idx:] = cs(k[kmin_idx:])
                         else:
@@ -1134,7 +1123,7 @@ class PreCalc(instr.MPIBase):
 
         beta_s *= (2 / np.pi)
         beta_t *= (2 / np.pi)
-        
+
         if sparse:
             # Spline betas to full size in ell again.
             beta_s_full = np.zeros((ells_full.size, L_range.size, nfact,
@@ -1149,24 +1138,23 @@ class PreCalc(instr.MPIBase):
                             for kidx in xrange(ks):
 
                                 # Tensor.
-                                cs = CubicSpline(ells, 
+                                cs = CubicSpline(ells,
                                      beta_t[:,Lidx,nidx,kidx,pidx,ridx])
                                 beta_t_full[:,Lidx,nidx,kidx,pidx,ridx] \
                                     = cs(ells_full)
 
                                 if pol == 'B':
                                     continue
-                                    
+
                                 # Scalar.
-                                cs = CubicSpline(ells, 
+                                cs = CubicSpline(ells,
                                      beta_s[:,Lidx,nidx,kidx,pidx,ridx])
                                 beta_s_full[:,Lidx,nidx,kidx,pidx,ridx] \
                                     = cs(ells_full)
             beta_s = beta_s_full
-            beta_t = beta_t_full                                
+            beta_t = beta_t_full
             ells = ells_full
 
-        
         # Combine all sub range betas on root if mpi.
         if self.mpi:
             self.barrier()
@@ -1189,21 +1177,21 @@ class PreCalc(instr.MPIBase):
             else:
                 beta_s_full = None
                 beta_t_full = None
-                
+
             # loop over all non-root ranks
             for rank in xrange(1, self.mpi_size):
 
                 # allocate space for sub beta on root
                 if self.mpi_rank == 0:
                     r_size = radii_per_rank[rank].size
-                    
+
                     beta_s_sub = np.ones((ells.size,L_range.size,nfact,
                                           ks,len(pols_s),r_size))
                     beta_t_sub = np.ones((ells.size,L_range.size,nfact,
                                           ks,len(pols_t),r_size))
 
                 # send beta_sub to root
-                if self.mpi_rank == rank:                    
+                if self.mpi_rank == rank:
                     self._comm.Send(beta_s, dest=0, tag=rank)
                     self._comm.Send(beta_t, dest=0,
                                     tag=rank + self.mpi_size + 1)
@@ -1230,12 +1218,15 @@ class PreCalc(instr.MPIBase):
             beta_t = self.broadcast_array(beta_t_full)
 
         if not bin:
-            self.depo['scalar']['beta'] = beta_s
-            self.depo['tensor']['beta'] = beta_t
+#            self.depo['scalar']['beta'] = beta_s
+#            self.depo['tensor']['beta'] = beta_t
+            self.beta['beta_s'] = beta_s
+            self.beta['beta_t'] = beta_t
+            self.beta['init_beta'] = True
             return
 
         # Bin beta
-        bins = self.bins
+        bins = self.bins['bins']
 
         beta_s_f = np.asfortranarray(beta_s)
         beta_t_f = np.asfortranarray(beta_t)
@@ -1252,7 +1243,7 @@ class PreCalc(instr.MPIBase):
         # binned_stat output is one less than input bins size
         bins_ext = np.empty(bins.size + 1, dtype=float)
         bins_ext[:-1] = bins
-        bins_ext[-1] = self.lmax + 0.1
+        bins_ext[-1] = self.bins['lmax'] + 0.1
 
         for pidx, pol in enumerate(pols_t):
             for kidx in xrange(ks):
@@ -1279,7 +1270,7 @@ class PreCalc(instr.MPIBase):
         if np.any(np.isnan(beta_s)):
             raise ValueError('nan in beta_s')
         if np.any(np.isnan(beta_t)):
-            raise ValueError('nan in beta_t')            
+            raise ValueError('nan in beta_t')
 
         beta_s = np.ascontiguousarray(beta_s_f)
         beta_t = np.ascontiguousarray(beta_t_f)
@@ -1289,26 +1280,30 @@ class PreCalc(instr.MPIBase):
 
         # so now these are the unbinned versions
         # Note that they might be using a sparse high ell
-        self.depo['scalar']['beta'] = beta_s
-        self.depo['tensor']['beta'] = beta_t
+#        self.depo['scalar']['beta'] = beta_s
+#        self.depo['tensor']['beta'] = beta_t
+
+        self.beta['beta_s'] = beta_s
+        self.beta['beta_t'] = beta_t
 
         # binned versions
-        self.depo['scalar']['b_beta'] = b_beta_s
-        self.depo['tensor']['b_beta'] = b_beta_t
+#        self.depo['scalar']['b_beta'] = b_beta_s
+#        self.depo['tensor']['b_beta'] = b_beta_t
+
+        self.beta['b_beta_s'] = b_beta_s
+        self.beta['b_beta_t'] = b_beta_t
+        self.beta['init_beta'] = True
 
         return
 
-class Template(PreCalc):
+class Template(object):
     '''
     Create arrays of shape (nfact, 3, k.size)
     '''
 
-    # Remove depo calls here. This class does not need
-    # to inheret from anything. 
-
     def __init__(self, template='local', **kwargs):
         '''
-     
+
         Keyword Arguments
         -----------------
         template : str
@@ -1327,12 +1322,12 @@ class Template(PreCalc):
         ortho: S = 6(-3/(k1k2)^3 - cycl.  - 8/(k1k2k3)^2 + 1/(k1k2k3^3) )
 
         For local we only need alpha and beta.
-        For equilateral and orthgonal we need alpha, beta, gamma, delta 
+        For equilateral and orthgonal we need alpha, beta, gamma, delta
         (see creminelli 2005).
         '''
-        
+
         # You don't have to get primordial parameters from CAMB
-        # transfer functions don't depend on them        
+        # transfer functions don't depend on them
         self.scalar_amp = 2.1e-9
         # NOTE (2pi)^3????
         # self.common_amp = (2*np.pi)**3 * 16 * np.pi**4 * self.scalar_amp**2
@@ -1345,15 +1340,17 @@ class Template(PreCalc):
         # load up template based on choice in init
         self.template = template
 
-    def local(self, k=None, fnl=1):
+    def local(self, k, fnl=1):
         '''
         Get the wavenumber arrays for the local template.
 
+        Arguments
+        ---------
+        k : array-like, None
+            Monotonically increasing array of wavenumbers.
+
         Keyword arguments
         -----------------
-        k : array-like, None
-            Array of wavenumbers, if None try to use
-            internally stored values. (default : None)
         fnl : float
             (default : 1)
 
@@ -1368,7 +1365,7 @@ class Template(PreCalc):
             shape: = 2 * fnl
 
         Notes
-        -----        
+        -----
         '''
 
         if k is None:
@@ -1382,15 +1379,17 @@ class Template(PreCalc):
 
         return template, amp
 
-    def equilateral(self, k=None, fnl=1):
+    def equilateral(self, k, fnl=1):
         '''
         Get the wavenumber arrays for the equilateral template.
 
+        Arguments
+        ---------
+        k : array-like, None
+            Monotonically increasing array of wavenumbers.
+
         Keyword arguments
         -----------------
-        k : array-like, None
-            Array of wavenumbers, if None try to use
-            internally stored values. (default : None)
         fnl : float
             (default : 1)
 
@@ -1416,21 +1415,21 @@ class Template(PreCalc):
         # Keep same ordering as local.
         template = np.asarray([km3, ones, km2, km1])
         amp = 6. * fnl
-        
+
         return template, amp
 
-    def orthogonal(self, k=None, fnl=1):
+    def orthogonal(self, k, fnl=1):
         '''
         Note, same as equilateral.
         '''
-        
+
         return self.equilateral(k=k, fnl=fnl)
 
-class Fisher(Template):
+class Fisher(Template, PreCalc):
 
     def __init__(self, base_dir, **kwargs):
         '''
-        
+
         Arguments
         ---------
         base_dir : str
@@ -1441,32 +1440,52 @@ class Fisher(Template):
         camb_opts
         beta_opts
         bin_opts
-        
+
         kwargs : {MPIBase_opts}
-        
+
 
         Notes
         -----
         >> F = Fisher()
-        >> F.compute_binned_bispec('local') # Precomputes beta et al.
+        >> F.get_bins(*kwargs)
+        >> F.get_beta(**kwargs)
+        >> F.get_binned_bispec('local') # Precomputes beta
         >> fisher = F.interp_fisher()
         >> Do stuff
         >> F.compute_binned_bispec('equilateral')
 
         '''
 
-        if not os.path.exist(base_dir):
-            pass
+
+        if not os.path.exists(base_dir):
+            raise ValueError('base_dir not found')
+        self.base_dir = base_dir
+
+        # Create subdirectories.
+        self.subdirs = {}
+        sdirs = ['precomputed', 'fisher']
+
+        for sdir in sdirs:
+            self.subdirs[sdir] = opj(base_dir, sdir)
+
+            if not os.path.exists(self.subdirs[sdir]):
+                os.makedirs(self.subdirs[sdir])
 
         super(Fisher, self).__init__(**kwargs)
 
-        # require a working directory
+        # Perhaps overload all of the methods from precompute to
+        # to include a recurcive loop that runs function when
+        # precomputed version is not found?
+
+
+        # Ignore below, probably easier to have each method look for files
+        # by itself
         # Option to specify precomputed files here.
             # dict of filenames
             # beta, num_bins, etc.
             # beta needs to be stored with corresponding radii (perhaps same dir)
         # otherwise look for dedault names in default places.
-        # checked for existence by 
+        # checked for existence by
         # stored in depo (inhereted from precomp)
         # once binned bispectrum is computed, stored with template id, parity, pols?
 
@@ -1478,8 +1497,93 @@ class Fisher(Template):
         # loaded into memory.
 
 
+        def get_camb_output(**kwargs):
+            '''
+            Check for precomputed quantities.
+            '''
 
-    def binned_bispectrum(self, DL1, DL2, DL3, prim_template='local'):
+            rerun = False
+            items = ['transfer', 'lmax', 'k']
+            if kwargs.get('high_ell', False):
+                items += 'ell'
+
+            for ttype in ['scalar', 'tensor']:
+                for item in items:
+                    try:
+                        pass
+                    except:
+                        # file cannot be opened, print and
+                        # recompute
+                        # place into depo
+                        recompute = True
+                        break
+
+            if recompute:
+                super(Fisher, self).get_camb_output(**kwargs)
+
+                # Write quanitites to disk
+
+
+#            self.depo[ttype] = {'transfer' : tr,
+#                                'lmax' : lmax,
+#                                'k' : k,
+#                                'ells_sparse' : ells} # None normally
+
+
+#        F.get_camb_output(**camb_opts)
+#        F.init_bins(lmin=lmin, lmax=lmax,
+#                    parity='odd', verbose=True)
+#        F.init_wig3j()
+#        bins = F.bins
+
+#        radii = F.get_updated_radii()
+
+#        if prim_template == 'local':
+#            f, _ = F.local()
+#        else:
+#            f, _ = F.equilateral()
+
+#        F.beta(f=f, radii=radii, verbose=True)
+#        F.init_pol_triplets()
+
+    def init_pol_triplets(self, single_bmode=True):
+        '''
+        Store polarization triples internally in (..,3) shaped array.
+
+        For now, only triplets containing a single B-mode.
+
+        Keyword Arguments
+        -----------------
+        single_bmode : bool
+            Only create triplets that contain a single B-mode.
+            (default : True)
+
+        Notes
+        -----
+        I = 0, E = 1, B = 2
+        '''
+
+        if single_bmode is False:
+            raise NotImplementedError('Not possible yet')
+
+        pol_trpl = np.zeros((12, 3), dtype=int)
+
+        pol_trpl[0] = 0, 0, 2
+        pol_trpl[1] = 0, 2, 0
+        pol_trpl[2] = 2, 0, 0
+        pol_trpl[3] = 1, 0, 2
+        pol_trpl[4] = 1, 2, 0
+        pol_trpl[5] = 2, 1, 0
+        pol_trpl[6] = 0, 1, 2
+        pol_trpl[7] = 0, 2, 1
+        pol_trpl[8] = 2, 0, 1
+        pol_trpl[9] = 1, 1, 2
+        pol_trpl[10] = 1, 2, 1
+        pol_trpl[11] = 2, 1, 1
+
+        self.bispec['pol_trpl'] = pol_trpl
+
+    def _binned_bispectrum(self, DL1, DL2, DL3, prim_template='local'):
         '''
         Return binned bispectrum for given \Delta L triplet.
 
@@ -1490,33 +1594,35 @@ class Fisher(Template):
         DL3 : Delta L_3
 
         Returns
-        -------        
-        binned_bispectrum : array-like 
+        -------
+        binned_bispectrum : array-like
             Shape: (nbin, nbin, nbin, npol), where npol
             is the number of polarization triplets considered.
         '''
 
         # loop over bins
-        bins = self.bins
-        ells = self.ells
+        bins = self.bins['bins']
+        ells = self.bins['ells']
         lmin = ells[0]
-        num_pass = self.num_pass
+        num_pass = self.bins['num_pass']
         # convert to float
         num_pass = num_pass.astype(float)
-        first_pass = self.first_pass
+        first_pass = self.bins['first_pass']
 
-        wig_t = self.wig_t
-        wig_s = self.wig_s
+        wig_t = self.bispec['wig_t']
+        wig_s = self.bispec['wig_s']
 
-        pol_trpl = self.pol_trpl
+        pol_trpl = self.bispec['pol_trpl']
         psize = pol_trpl.shape[0]
 
         # binned betas
-        beta_s = self.depo['scalar']['b_beta']
-        beta_t = self.depo['tensor']['b_beta']
+#        beta_s = self.depo['scalar']['b_beta']
+#        beta_t = self.depo['tensor']['b_beta']
+        beta_s = self.beta['b_beta_s']
+        beta_t = self.beta['b_beta_t']
 
-        # get radii corresponing to beta
-        radii = self.depo['radii']
+        # Get radii used for beta
+        radii = self.beta['radii']
         r2 = radii**2
 
         # allocate r arrays
@@ -1526,7 +1632,7 @@ class Fisher(Template):
         integrand_sst = integrand.copy()
 
         # check parity
-        parity = self.depo['parity'] 
+        parity = self.bins['parity']
         if parity == 'odd' and (DL1 + DL2 + DL3) % 2 == 0:
             warnings.warn('parity is odd and DL1 + DL2 + DL3 is even, '
                           'bispectrum is zero')
@@ -1536,7 +1642,7 @@ class Fisher(Template):
             warnings.warn('parity is even and DL1 + DL2 + DL3 is odd, '
                           'bispectrum is zero')
             return
-        
+
         # Indices to L arrays
         Lidx1 = DL1 + 2
         Lidx2 = DL2 + 2
@@ -1558,7 +1664,7 @@ class Fisher(Template):
         idx_per_rank = []
         for rank in xrange(self.mpi_size):
             idx_per_rank.append(idx_outer_f[rank::self.mpi_size])
-            
+
         # allocate bispectrum
         nbins = bins.size
         bispectrum = np.zeros((bins_outer.size, nbins, nbins, psize))
@@ -1571,7 +1677,7 @@ class Fisher(Template):
         elif prim_template == 'orthogonal':
             num_a = -3.
             num_b = -8.
-            num_c = 3.                
+            num_c = 3.
 
         for idxb, (idx1, i1) in enumerate(zip(idx_outer, bins_outer)):
             # note, idxb is bins_outer index for bispectrum per rank
@@ -1584,12 +1690,12 @@ class Fisher(Template):
             alpha_t_l1 = beta_t[idx1,Lidx1,0,1,:,:] # (3,r.size)
 
             if prim_template != 'local':
-                delta_s_l1 = beta_s[idx1,Lidx1,0,2,:,:] 
-                delta_t_l1 = beta_t[idx1,Lidx1,0,2,:,:] 
+                delta_s_l1 = beta_s[idx1,Lidx1,0,2,:,:]
+                delta_t_l1 = beta_t[idx1,Lidx1,0,2,:,:]
 
                 gamma_s_l1 = beta_s[idx1,Lidx1,0,3,:,:]
                 gamma_t_l1 = beta_t[idx1,Lidx1,0,3,:,:]
-            
+
 
             for idx2, i2 in enumerate(bins[idx1:]):
                 idx2 += idx1
@@ -1602,8 +1708,8 @@ class Fisher(Template):
                 alpha_t_l2 = beta_t[idx2,Lidx2,0,1,:,:] # (3,r.size)
 
                 if prim_template != 'local':
-                    delta_s_l2 = beta_s[idx2,Lidx2,0,2,:,:] 
-                    delta_t_l2 = beta_t[idx2,Lidx2,0,2,:,:] 
+                    delta_s_l2 = beta_s[idx2,Lidx2,0,2,:,:]
+                    delta_t_l2 = beta_t[idx2,Lidx2,0,2,:,:]
 
                     gamma_s_l2 = beta_s[idx2,Lidx2,0,3,:,:]
                     gamma_t_l2 = beta_t[idx2,Lidx2,0,3,:,:]
@@ -1611,11 +1717,11 @@ class Fisher(Template):
 
                 for idx3, i3 in enumerate(bins[idx2:]):
                     idx3 += idx2
-                    
+
                     num = num_pass[idx1, idx2, idx3]
-                    if num == 0.: 
+                    if num == 0.:
                         # No valid ell tuples in this bin
-                        # Note: do not impose conditions on 
+                        # Note: do not impose conditions on
                         # the bins here!
                         continue
 
@@ -1627,8 +1733,8 @@ class Fisher(Template):
                     alpha_t_l3 = beta_t[idx3,Lidx3,0,1,:,:] # (3,r.size)
 
                     if prim_template != 'local':
-                        delta_s_l3 = beta_s[idx3,Lidx3,0,2,:,:] 
-                        delta_t_l3 = beta_t[idx3,Lidx3,0,2,:,:] 
+                        delta_s_l3 = beta_s[idx3,Lidx3,0,2,:,:]
+                        delta_t_l3 = beta_t[idx3,Lidx3,0,2,:,:]
 
                         gamma_s_l3 = beta_s[idx3,Lidx3,0,3,:,:]
                         gamma_t_l3 = beta_t[idx3,Lidx3,0,3,:,:]
@@ -1637,7 +1743,7 @@ class Fisher(Template):
                     ell1, ell2, ell3 = first_pass[idx1, idx2, idx3,:]
 
                     if ell1 < 2 or ell2 < 2 or ell3 < 2:
-                        raise ValueError("ells are wrong")                        
+                        raise ValueError("ells are wrong")
 
                     # indices to full-size ell arrays
                     lidx1 = ell1 - lmin
@@ -1649,15 +1755,15 @@ class Fisher(Template):
                     L3 = DL3 + ell3
 
                     # Calculate the angular prefactor (eq. 6.19 thesis Shiraishi)
-                    # before polarization loop 
-                    # Overall angular part 
+                    # before polarization loop
+                    # Overall angular part
                     ang = wig3jj([2*L1, 2*L2, 2*L3,
                                   0, 0, 0])
 
                     # NOTE: TODO, B must be imag, so check this
-                    ang *= np.real((-1j)**(ell1 + ell2 + ell3 - 1)) 
+                    ang *= np.real((-1j)**(ell1 + ell2 + ell3 - 1))
                     ang *= (-1)**((L1 + L2 + L3)/2)
-                
+
                     ang *= np.sqrt( (2*L1 + 1) * (2*L2 + 1) * (2*L3 + 1))
                     ang /= (2. * np.sqrt(np.pi))
 
@@ -1668,7 +1774,7 @@ class Fisher(Template):
                     ang_tss *= wig_s[lidx3, Lidx3]
 
                     ang_tss *= ang
-                    if ang_tss != 0.: 
+                    if ang_tss != 0.:
                         ang_tss *= wig9jj( [(2*ell1),  (2*ell2),  (2*ell3),
                                             (2*L1),  (2*L2),  (2*L3),
                                             4,  2,  2] ) #NOTE HERE
@@ -1775,7 +1881,7 @@ class Fisher(Template):
                                 beta_s_l2[pidx2,:] * gamma_s_l3[pidx3,:]
 
                             integrand_tss *= ang_tss
-                            
+
                             integrand += integrand_tss
 
                         # STS
@@ -1879,7 +1985,7 @@ class Fisher(Template):
                             integrand_sst *= ang_sst
 
                             integrand += integrand_sst
-                        
+
                         # Integrate over r
                         integrand *= r2
                         bispec = trapz_loc(integrand, radii)
@@ -1888,13 +1994,13 @@ class Fisher(Template):
                         # Note that for plotting purposes, you need to remove
                         # the num factor again
                         # Note, in Fisher, num cancels with binned (Cl)^-1's
-                        bispec *= num 
-                        
-                        bispectrum[idxb,idx2,idx3,pidx] = bispec             
-            
+                        bispec *= num
+
+                        bispectrum[idxb,idx2,idx3,pidx] = bispec
+
         bispectrum *= (8 * np.pi)**(3/2.) / 3.
 
-        # Each rank has, for a unordered set of i1, the i2, i3, pol bispectra 
+        # Each rank has, for a unordered set of i1, the i2, i3, pol bispectra
         # Now we add them together on the root rank
         if self.mpi:
             self.barrier()
@@ -1903,7 +2009,7 @@ class Fisher(Template):
             if self.mpi_rank == 0:
 
                 bispec_full = np.zeros((bins_outer_f.size,nbins,nbins,psize))
-                
+
                 # place sub B on root in full B for root
                 for i, fidx in enumerate(idx_per_rank[0]):
                     # i is index to sub, fidx index to full
@@ -1927,7 +2033,7 @@ class Fisher(Template):
                 if self.mpi_rank == 0:
                     self._comm.Recv(bispec_rec, source=rank, tag=rank)
 
-                    # place into root bispectrum                    
+                    # place into root bispectrum
                     for i, fidx in enumerate(idx_per_rank[rank]):
                         # i is index to sub, fidx index to full
                         bispec_full[fidx,...] = bispec_rec[i,...]
@@ -1938,56 +2044,25 @@ class Fisher(Template):
             # no MPI, so process already has full bispectrum
             return bispectrum
 
-    def compute_binned_bispec(prim_template):
+    def _compute_binned_bispec(self, prim_template):
         '''
         Compute the combined binned bispectra from all
         allowed L values.
-        
+
         Arguments
         ---------
         prim_template : str
             Primordial template. Either "local", "equilateral"
             or "orthogonal".
-        
-        Keyword arguments
-        -----------------
 
-
-        Notes
-        -----
-        
+        Returns
+        -------
+        binned_bispec : array-like
+            Shape: (nbin, nbin, nbin, npol), where npol
+            is the number of polarization triplets considered.
         '''
 
-        lmin = 2
-        lmax = 5000
-
-        opj = os.path.join
-        ana_dir = '/mn/stornext/d8/ITA/spider/adri/analysis/20171217_sst/'
-
-        camb_opts = dict(camb_out_dir = opj(ana_dir, 'camb_output/high_acy/sparse_5000'),
-                         tag='r0',
-                         lensed=False,
-                         high_ell=True)
-
-        F = fisher.Fisher()
-        F.get_camb_output(**camb_opts)
-        F.init_bins(lmin=lmin, lmax=lmax, 
-                    parity='odd', verbose=True)
-        F.init_wig3j()
-        bins = F.bins
-
-        radii = F.get_updated_radii()
-
-        if prim_template == 'local':
-            f, _ = F.local()
-        else:
-            f, _ = F.equilateral()
-
-        F.beta(f=f, radii=radii, verbose=True)
-        F.init_pol_triplets()
-        if F.mpi_rank  == 0:
-            print('done precalculating')
-
+        # All the tuples for single B-mode bispectra.
         L_tups = [(+1, +1, +1),
                   (+1, -1, -1),
                   (-1, +1, +1),
@@ -1997,30 +2072,154 @@ class Fisher(Template):
 
         for Lidx, L_tup in enumerate(L_tups):
 
-            if F.mpi_rank == 0:
+            if self.mpi_rank == 0:
                 print('working on DL1, DL2, DL3:', L_tup)
 
             if Lidx == 0:
-                B = F.binned_bispectrum(*L_tup, prim_template=prim_template)
+                binned_bispec = self._binned_bispectrum(*L_tup, prim_template=prim_template)
             else:
-                B += F.binned_bispectrum(*L_tup, prim_template=prim_template)
+                binned_bispec += self._binned_bispectrum(*L_tup, prim_template=prim_template)
 
-        if F.mpi_rank  == 0:
+        return binned_bispec
 
-            np.save(opj(ana_dir, 'bispectrum/run_so', prim_template,
-                        'bispectrum.npy'), B)
-            np.save(opj(ana_dir, 'bispectrum/run_so', prim_template,
-                        'bins.npy'), F.bins)
-            np.save(opj(ana_dir, 'bispectrum/run_so', prim_template,
-                        'num_pass.npy'), F.num_pass)
-            np.save(opj(ana_dir, 'bispectrum/run_so', prim_template,
-                        'first_pass.npy'), F.first_pass)
-            np.save(opj(ana_dir, 'bispectrum/run_so', prim_template,
-                        'beta_s.npy'), F.depo['scalar']['b_beta'])
-            np.save(opj(ana_dir, 'bispectrum/run_so', prim_template,
-                        'beta_t.npy'), F.depo['tensor']['b_beta'])
-            np.save(opj(ana_dir, 'bispectrum/run_so', prim_template,
-                        'pol_trpl.npy'), F.pol_trpl)
+    def get_binned_bispec(self, prim_template, load=True):
+        '''
+        Compute binned bispectrum or load from disk.
+
+        Arguments
+        ---------
+        prim_template : str
+            Primordial template. Either "local", "equilateral"
+            or "orthogonal".
+        
+        Keyword arguments
+        -----------------
+        load : bool
+            Try to load bispectrum + properties.
+        '''
+
+        path = self.subdirs['precomputed']
+        bispec_file = opj(path, 'bispec.pkl')
+        recompute = not load
+
+        if load:
+            # NOTE loading on root?
+            try:
+                pkl_file = open(bispec_file, 'rb')
+            except IOError:
+                print('{} not found, recomputing bispec'.format(bispec_file))
+                recompute = True
+            else:
+                print('loaded bispectrum from {}'.format(bispec_file))
+                self.bispec = pickle.load(pkl_file)
+                pkl_file.close()
+
+        if recompute:
+            if not self.bins['init_bins']:
+                raise ValueError('bins not initiated')
+
+            if not self.beta['init_beta']:
+                raise ValueError('beta not initiated')
+            
+            self.init_wig3j()
+            self.init_pol_triplets(single_bmode=True)
+            b_bispec = self._compute_binned_bispec(prim_template)
+            self.bispec['bispec'] = b_bispec
+
+            # Save for next time.
+            if self.mpi_rank == 0:
+
+                # Store in pickle file.
+                with open(bispec_file, 'wb') as handle:
+                    pickle.dump(self.bispec, handle,
+                                protocol=pickle.HIGHEST_PROTOCOL)
+
+
+    def get_bins(self, load=True, **kwargs):
+        '''
+        Init bins or load from disk.
+
+        Keyword arguments
+        -----------------
+        load : bool
+            Try to load bispectrum + properties.
+        kwargs : {init_bins_opts}
+        '''
+
+        path = self.subdirs['precomputed']
+        bins_file = opj(path, 'bins.pkl')
+        recompute = not load
+
+        if load:
+            # NOTE loading on root?
+            try:
+                pkl_file = open(bins_file, 'rb')
+            except IOError:
+                print('{} not found, recomputing bins'.format(bins_file))
+                recompute = True
+            else:
+                print('loaded bins from {}'.format(bins_file))
+                self.bins = pickle.load(pkl_file)
+                pkl_file.close()
+                
+                #def init_bins(self, lmin=None, lmax=None,
+                #  bins=None, parity='odd',
+                #  verbose=False):
+                # NOTE, check if lmin, lmax, bins, parity all match
+                # otherwise recompute
+
+        if recompute:
+            self.init_bins(**kwargs)
+
+            # Save for next time.
+            if self.mpi_rank == 0:
+
+                # Store in pickle file.
+                with open(bins_file, 'wb') as handle:
+                    pickle.dump(self.bins, handle,
+                                protocol=pickle.HIGHEST_PROTOCOL)
+
+
+    def get_beta(self, load=True, **kwargs):
+        '''
+        Compute binned bispectrum or load from disk.
+
+        Keyword arguments
+        -----------------
+        load : bool
+            Try to load bispectrum + properties.
+        kwargs : {beta_opts}
+        '''
+
+        path = self.subdirs['precomputed']
+        beta_file = opj(path, 'beta.pkl')
+        recompute = not load
+
+        if load:
+            # NOTE loading on root?
+            try:
+                pkl_file = open(beta_file, 'rb')
+            except IOError:
+                print('{} not found, recomputing beta'.format(beta_file))
+                recompute = True
+            else:
+                print('loaded beta from {}'.format(beta_file))
+                self.beta = pickle.load(pkl_file)
+                pkl_file.close()
+
+        if recompute:
+            if not self.bins['init_bins']:
+                raise ValueError('bins not initiated')
+
+            self.init_beta(**kwargs)
+
+            # Save for next time.
+            if self.mpi_rank == 0:
+
+                # Store in pickle file.
+                with open(beta_file, 'wb') as handle:
+                    pickle.dump(self.beta, handle,
+                                protocol=pickle.HIGHEST_PROTOCOL)
 
     def naive_fisher(self, lmin, lmax, out_dir, nls_tot, bispec,
                      bins, num_pass, pol_trpl,
@@ -2036,69 +2235,21 @@ class Fisher(Template):
         bins : array-like
             Bins. Shape: (nbins)
         num_pass : array-like
-            Number of allowed ell triplets in bin. 
+            Number of allowed ell triplets in bin.
             Shape: (nbins, nbins, nbins)
         pol_trpl : array-like
-            Polarization triplets for bispectrum. 
+            Polarization triplets for bispectrum.
             Shape: (npol, 3)
-        
+
 
         Notes
         -----
-        
+
         '''
-            
+
     def interp_fisher(self):
         '''
-        
+
         '''
-
-
-    def check_precomp(self, check_exists, ignore):
-        '''
-        Check whether required precomputed quantities
-        exist on disk or have to be (re)computed.
-        
-        arguments
-        -----------------
-        check_exists : array-like of strings
-            Precomputable quantities that are computed
-            when not found. Options:
-                "bins"
-                "num_pass"
-                "first_pass"
-                "pol_trpl"
-                "bispec"
-                "beta"
-                ""
-                ""
-                ""
-
-        Keyword arguments
-        -----------------
-        ignore : bool
-            Recompute regardless of existance of files.
-            (default : False)
-        recompute_sync : bool
-            Also recompute all quantities that come after 
-            recomputed quantity. (default : True)        
-        '''
-    
-        # Establish what base directory is
-        
-        # go over files in chronological order and check if they exist
-        # means that you need standard file names.
-        # make beta always include equilateral funcitons.
-        
-        for ffile in check_exists:
-            pass
-            # os path exist
-            # print('bla exists') or print('bla not found, recomputing..')
-            # or print('bla exists but recomputing anyway')
-        
-            # this means that from attributes all kwargs to all precompute 
-            # methods are available.
-
-
 
 

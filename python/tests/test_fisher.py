@@ -1,7 +1,7 @@
 import unittest
 import numpy as np
 import os
-import fisher
+from sst import Fisher
 
 opj = os.path.join
 
