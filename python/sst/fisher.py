@@ -1,5 +1,5 @@
 '''
-Calculate Fisher information and all needed quantities for a
+Calculate Fisher information and all required quantities for a
 tensor-scalar-scalar bispectrum.
 '''
 
@@ -53,6 +53,10 @@ class PreCalc(instr.MPIBase):
         # Initialize wigner tables for lmax=8000.
         wig.wig_table_init(2 * 8000, 9)
         wig.wig_temp_init(2 * 8000)
+
+    def __del__(self):
+        ''' Force all ranks to stop after keyboard interrupt.'''
+        self._comm.Abort()
 
     def get_camb_output(self, camb_out_dir='.', high_ell=False,
                         interp_factor=None, **kwargs):
@@ -289,7 +293,6 @@ class PreCalc(instr.MPIBase):
 
         radii = np.concatenate((low, re1, re2, rec))
 
-#        self.beta['radii'] = radii
         return radii
 
     def get_updated_radii(self):
@@ -306,7 +309,6 @@ class PreCalc(instr.MPIBase):
 
         radii = np.concatenate((low, re1, re2, rec, rec_new, rec_extra))
 
-#        self.beta['radii'] = radii
         return radii
 
     def get_default_bins(self):
@@ -406,11 +408,6 @@ class PreCalc(instr.MPIBase):
         ells = np.arange(lmin, lmax+1)
         self.bins['ells'] = ells
 
-#        self.lmax = lmax
-#        self.lmin = lmin
-#        ells = np.arange(lmin, lmax+1)
-#        self.ells = ells
-
         if bins is None:
             bins = self.get_default_bins()
 
@@ -463,8 +460,8 @@ class PreCalc(instr.MPIBase):
             bin1 = bins[idx1_full]
 
             if self.mpi_rank == 0 and verbose:
-                sys.stdout.write('\r'+'bidx: {}/{}'.format(idx1, idx_sub.size-1))
-
+                sys.stdout.write('\r'+'bidx: {}/{}'.format(
+                    idx1+1, idx_sub.size))
             try:
                 lmax1 = bins[idx1_full + 1] - 1
             except IndexError:
@@ -579,7 +576,7 @@ class PreCalc(instr.MPIBase):
                         self._comm.Recv(first_pass_rec_cont,
                                         source=rank, tag=rank + self.mpi_size)
                         if verbose:
-                            print(self.mpi_rank, 'root received')
+                            print('root received {}'.format(rank))
 
                         num_pass_rec[rank::self.mpi_size] = num_pass_rec_cont
                         first_pass_rec[rank::self.mpi_size] = first_pass_rec_cont
@@ -651,7 +648,7 @@ class PreCalc(instr.MPIBase):
                         self._comm.Recv(num_pass_rec, source=rank, tag=rank)
                         self._comm.Recv(first_pass_rec, source=rank,
                                         tag=rank + self.mpi_size)
-                        print(self.mpi_rank, 'root received')
+                        print('root received {}'.format(rank))
 
                         # simply add num_pass but only take first pass if lower
                         num_pass += num_pass_rec
@@ -676,9 +673,8 @@ class PreCalc(instr.MPIBase):
 
         self.barrier()
 
-        if self.mpi_rank == 0:
-            # trim away the zeros in first_pass
-            self.bins['unique_ells'] = np.unique(first_pass)[1:]
+        # trim away the zeros in first_pass
+        self.bins['unique_ells'] = np.unique(first_pass)[1:]
 
         self.bins['num_pass'] = num_pass # No. of good triplets per bin.
         self.bins['first_pass'] = first_pass # Lowest good triplet per bin.
@@ -689,7 +685,6 @@ class PreCalc(instr.MPIBase):
         # Perhaps store bins_outer?
 
         # NOTE write arrays to disk, check if scattered?
-
 
 
         if self.mpi_rank == 0 and verbose:
@@ -838,8 +833,6 @@ class PreCalc(instr.MPIBase):
         self.bispec['wig_s'] = wig_s
         self.bispec['wig_t'] = wig_t
 
-    # add function that reads in precomputed beta
-
     def init_beta(self, func=None, L_range=[-2, -1, 0, 1, 2], radii=None, bin=True,
              optimize=True, interp_factor=None, sparse=True, verbose=False):
         '''
@@ -879,10 +872,6 @@ class PreCalc(instr.MPIBase):
             raise ValueError('bins not initialized')
 
         ells = self.depo['scalar']['ells_camb']
-#            # In this case, transfer function uses these mulipoles.
-#            ells = self.depo['scalar']['ells_sparse']
-#        else:
-#            ells = self.ells
 
         if sparse:
             # Use bins as ells.
@@ -992,7 +981,6 @@ class PreCalc(instr.MPIBase):
         ells_ext = np.arange(ells[-1] + L_range[-1] + 1)
 
         for ridx, radius in enumerate(radii_sub):
-            print(radius)
             kr = k * radius
             # Array that gives L -> kr idx mapping, i.e. in which kr sits ell
             kr_idx = np.digitize(ells_ext, bins=kr, right=True)
@@ -1012,6 +1000,7 @@ class PreCalc(instr.MPIBase):
                     self.mpi_rank, ridx, radii_sub.size - 1, radius))
 
             ells_full_size = ells_full.size
+            ells_size = ells.size
             ell_prev = ells[0] - 1
             for lidx_b, ell in enumerate(ells):
 
@@ -1021,8 +1010,8 @@ class PreCalc(instr.MPIBase):
                 lidx = idxmap[lidx_b]
 
                 if self.mpi_rank == 0 and verbose:
-                    sys.stdout.write('\r'+'lidx: {}/{}'.format(lidx,
-                                                               ells_full_size-1))
+                    sys.stdout.write('\r'+'lidx: {}/{}, ell: {}'.format(
+                        lidx, ells_size-1, ell))
                 for Lidx, L in enumerate(L_range):
                     L = ell + L
                     if L < 0:
@@ -1121,10 +1110,19 @@ class PreCalc(instr.MPIBase):
                 if self.mpi_rank == 0:
                     sys.stdout.flush()
 
+            if self.mpi_rank == 0 and verbose:
+                # To have correct next print statement.
+                sys.stdout.write('\n')
+
+
         beta_s *= (2 / np.pi)
         beta_t *= (2 / np.pi)
 
+        self.barrier()
+
         if sparse:
+            if self.mpi_rank == 0 and verbose:
+                print('Interpolating beta over multipoles')
             # Spline betas to full size in ell again.
             beta_s_full = np.zeros((ells_full.size, L_range.size, nfact,
                                     ks, len(pols_s), radii_sub.size))
@@ -1132,6 +1130,11 @@ class PreCalc(instr.MPIBase):
                                     ks, len(pols_t), radii_sub.size))
 
             for ridx, _ in enumerate(radii_sub):
+
+                if self.mpi_rank == 0 and verbose:
+                    sys.stdout.write('\r'+'ridx: {}/{}'.format(
+                        ridx+1, radii_sub.size))
+
                 for Lidx, _ in enumerate(L_range):
                     for pidx, pol in enumerate(pols_t):
                         for nidx in xrange(nfact):
@@ -1151,6 +1154,11 @@ class PreCalc(instr.MPIBase):
                                      beta_s[:,Lidx,nidx,kidx,pidx,ridx])
                                 beta_s_full[:,Lidx,nidx,kidx,pidx,ridx] \
                                     = cs(ells_full)
+
+            if self.mpi_rank == 0 and verbose:
+                print('')
+                sys.stdout.flush()
+
             beta_s = beta_s_full
             beta_t = beta_t_full
             ells = ells_full
@@ -1158,6 +1166,9 @@ class PreCalc(instr.MPIBase):
         # Combine all sub range betas on root if mpi.
         if self.mpi:
             self.barrier()
+
+            if self.mpi_rank == 0 and verbose:
+                print('Combining parallel computed parts of beta')
 
             # create full size beta on root
             if self.mpi_rank == 0:
@@ -1195,12 +1206,17 @@ class PreCalc(instr.MPIBase):
                     self._comm.Send(beta_s, dest=0, tag=rank)
                     self._comm.Send(beta_t, dest=0,
                                     tag=rank + self.mpi_size + 1)
+                    if verbose:
+                        print(self.mpi_rank, 'sent')
 
                 if self.mpi_rank == 0:
                     self._comm.Recv(beta_s_sub,
                                     source=rank, tag=rank)
                     self._comm.Recv(beta_t_sub, source=rank,
                                     tag=rank + self.mpi_size + 1)
+
+                    if verbose:
+                        print('root received {}'.format(rank))
 
                     # place into beta_full
                     for ridx, radius in enumerate(radii_per_rank[rank]):
@@ -1218,14 +1234,16 @@ class PreCalc(instr.MPIBase):
             beta_t = self.broadcast_array(beta_t_full)
 
         if not bin:
-#            self.depo['scalar']['beta'] = beta_s
-#            self.depo['tensor']['beta'] = beta_t
             self.beta['beta_s'] = beta_s
             self.beta['beta_t'] = beta_t
             self.beta['init_beta'] = True
+
             return
 
         # Bin beta
+        if self.mpi_rank == 0 and verbose:
+            print('Binning beta')
+
         bins = self.bins['bins']
 
         beta_s_f = np.asfortranarray(beta_s)
@@ -1278,18 +1296,12 @@ class PreCalc(instr.MPIBase):
         b_beta_s = np.ascontiguousarray(b_beta_s_f)
         b_beta_t = np.ascontiguousarray(b_beta_t_f)
 
-        # so now these are the unbinned versions
-        # Note that they might be using a sparse high ell
-#        self.depo['scalar']['beta'] = beta_s
-#        self.depo['tensor']['beta'] = beta_t
-
+        # So now these are the unbinned versions
+        # Note that they might be using a sparse high ell.
         self.beta['beta_s'] = beta_s
         self.beta['beta_t'] = beta_t
 
         # binned versions
-#        self.depo['scalar']['b_beta'] = b_beta_s
-#        self.depo['tensor']['b_beta'] = b_beta_t
-
         self.beta['b_beta_s'] = b_beta_s
         self.beta['b_beta_t'] = b_beta_t
         self.beta['init_beta'] = True
@@ -1447,9 +1459,10 @@ class Fisher(Template, PreCalc):
         Notes
         -----
         >> F = Fisher()
+        >> F.get_camb_output(camb_out_dir=camb_dir)
         >> F.get_bins(*kwargs)
         >> F.get_beta(**kwargs)
-        >> F.get_binned_bispec('local') # Precomputes beta
+        >> F.get_binned_bispec('equilateral') # Precomputes beta
         >> fisher = F.interp_fisher()
         >> Do stuff
         >> F.compute_binned_bispec('equilateral')
@@ -1473,55 +1486,36 @@ class Fisher(Template, PreCalc):
 
         super(Fisher, self).__init__(**kwargs)
 
-        # Perhaps overload all of the methods from precompute to
-        # to include a recurcive loop that runs function when
-        # precomputed version is not found?
+    def __del__(self):
+        ''' Force all ranks to stop after keyboard interrupt.'''
+        self._comm.Abort()
 
 
-        # Ignore below, probably easier to have each method look for files
-        # by itself
-        # Option to specify precomputed files here.
-            # dict of filenames
-            # beta, num_bins, etc.
-            # beta needs to be stored with corresponding radii (perhaps same dir)
-        # otherwise look for dedault names in default places.
-        # checked for existence by
-        # stored in depo (inhereted from precomp)
-        # once binned bispectrum is computed, stored with template id, parity, pols?
+#    def get_camb_output(**kwargs):
+#        '''
+#        Check for precomputed quantities.
+#        '''
 
+#        rerun = False
+#        items = ['transfer', 'lmax', 'k']
+#        if kwargs.get('high_ell', False):
+#            items += 'ell'
 
-        # Starting a new directory, you start a fisher instance.
-        # that creates directories and bins, beta, num_pass, etc all get stored
-        # bispectrum also gets stored
-        # you can then later on run the same thing, but precomputed stuff gets
-        # loaded into memory.
+#        for ttype in ['scalar', 'tensor']:
+#            for item in items:
+#                try:
+#                    pass
+#                except:
+                    # file cannot be opened, print and
+                    # recompute
+                    # place into depo
+#                    recompute = True
+#                    break
 
+#        if recompute:
+#            super(Fisher, self).get_camb_output(**kwargs)
 
-        def get_camb_output(**kwargs):
-            '''
-            Check for precomputed quantities.
-            '''
-
-            rerun = False
-            items = ['transfer', 'lmax', 'k']
-            if kwargs.get('high_ell', False):
-                items += 'ell'
-
-            for ttype in ['scalar', 'tensor']:
-                for item in items:
-                    try:
-                        pass
-                    except:
-                        # file cannot be opened, print and
-                        # recompute
-                        # place into depo
-                        recompute = True
-                        break
-
-            if recompute:
-                super(Fisher, self).get_camb_output(**kwargs)
-
-                # Write quanitites to disk
+            # Write quanitites to disk
 
 
 #            self.depo[ttype] = {'transfer' : tr,
@@ -2103,21 +2097,34 @@ class Fisher(Template, PreCalc):
         recompute = not load
 
         if load:
-            # NOTE loading on root?
-            try:
-                pkl_file = open(bispec_file, 'rb')
-            except IOError:
-                print('{} not found, recomputing bispec'.format(bispec_file))
-                recompute = True
-            else:
-                print('loaded bispectrum from {}'.format(bispec_file))
-                self.bispec = pickle.load(pkl_file)
-                pkl_file.close()
+            if self.mpi_rank == 0:
+                # Loading and printing on root.
+                try:
+                    pkl_file = open(bispec_file, 'rb')
+                except IOError:
+                    print('{} not found'.format(bispec_file))
+                    recompute = True
+                else:
+                    print('loaded bispectrum from {}'.format(bispec_file))
+                    self.bispec = pickle.load(pkl_file)
+                    pkl_file.close()
+
+            # This lets nonzero ranks know that file is not found.
+            recompute = self.broadcast(recompute)
+
+            if recompute is False:
+                # Succesfully loaded on root, so broadcast.
+                if self.mpi_rank != 0:
+                    self.bispec = None
+                self.bispec = self.broadcast(self.bispec)
+
 
         if recompute:
+            if self.mpi_rank == 0:
+                print('Recomputing bispec')
+
             if not self.bins['init_bins']:
                 raise ValueError('bins not initiated')
-
             if not self.beta['init_beta']:
                 raise ValueError('beta not initiated')
             
@@ -2129,11 +2136,12 @@ class Fisher(Template, PreCalc):
             # Save for next time.
             if self.mpi_rank == 0:
 
+                print('Storing bispec as: {}'.format(bispec_file))
+
                 # Store in pickle file.
                 with open(bispec_file, 'wb') as handle:
                     pickle.dump(self.bispec, handle,
                                 protocol=pickle.HIGHEST_PROTOCOL)
-
 
     def get_bins(self, load=True, **kwargs):
         '''
@@ -2151,28 +2159,43 @@ class Fisher(Template, PreCalc):
         recompute = not load
 
         if load:
-            # NOTE loading on root?
-            try:
-                pkl_file = open(bins_file, 'rb')
-            except IOError:
-                print('{} not found, recomputing bins'.format(bins_file))
-                recompute = True
-            else:
-                print('loaded bins from {}'.format(bins_file))
-                self.bins = pickle.load(pkl_file)
-                pkl_file.close()
-                
-                #def init_bins(self, lmin=None, lmax=None,
-                #  bins=None, parity='odd',
-                #  verbose=False):
-                # NOTE, check if lmin, lmax, bins, parity all match
-                # otherwise recompute
+            if self.mpi_rank == 0:
+                # Loading and printing on root.
+                try:
+                    pkl_file = open(bins_file, 'rb')
+                except IOError:
+                    print('{} not found'.format(bins_file))
+                    recompute = True
+                else:
+                    print('loaded bins from {}'.format(bins_file))
+                    self.bins = pickle.load(pkl_file)
+                    pkl_file.close()
+
+            # This lets nonzero ranks know that file is not found.
+            recompute = self.broadcast(recompute)
+
+            if recompute is False:
+                # Succesfully loaded on root, so broadcast.
+                if self.mpi_rank != 0:
+                    self.bins = None
+                self.bins = self.broadcast(self.bins)
+
+                    #def init_bins(self, lmin=None, lmax=None,
+                    #  bins=None, parity='odd',
+                    #  verbose=False):
+                    # NOTE, check if lmin, lmax, bins, parity all match
+                    # otherwise recompute
 
         if recompute:
+            if self.mpi_rank == 0:
+                print('Recomputing bins')
+
             self.init_bins(**kwargs)
 
             # Save for next time.
             if self.mpi_rank == 0:
+
+                print('Storing bins as: {}'.format(bins_file))
 
                 # Store in pickle file.
                 with open(bins_file, 'wb') as handle:
@@ -2196,18 +2219,31 @@ class Fisher(Template, PreCalc):
         recompute = not load
 
         if load:
-            # NOTE loading on root?
-            try:
-                pkl_file = open(beta_file, 'rb')
-            except IOError:
-                print('{} not found, recomputing beta'.format(beta_file))
-                recompute = True
-            else:
-                print('loaded beta from {}'.format(beta_file))
-                self.beta = pickle.load(pkl_file)
-                pkl_file.close()
+            if self.mpi_rank == 0:
+                # Loading and printing on root.
+                try:
+                    pkl_file = open(beta_file, 'rb')
+                except IOError:
+                    print('{} not found'.format(beta_file))
+                    recompute = True
+                else:
+                    print('loaded beta from {}'.format(beta_file))
+                    self.beta = pickle.load(pkl_file)
+                    pkl_file.close()
+
+            # This lets nonzero ranks know that file is not found.
+            recompute = self.broadcast(recompute)
+
+            if recompute is False:
+                # Succesfully loaded on root, so broadcast.
+                if self.mpi_rank != 0:
+                    self.beta = None
+                self.beta = self.broadcast(self.beta)
 
         if recompute:
+            if self.mpi_rank == 0:
+                print('Recomputing beta')
+
             if not self.bins['init_bins']:
                 raise ValueError('bins not initiated')
 
@@ -2215,6 +2251,8 @@ class Fisher(Template, PreCalc):
 
             # Save for next time.
             if self.mpi_rank == 0:
+
+                print('Storing beta as: {}'.format(beta_file))
 
                 # Store in pickle file.
                 with open(beta_file, 'wb') as handle:
