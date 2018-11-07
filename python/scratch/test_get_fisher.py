@@ -8,11 +8,11 @@ F = Fisher(test_dir)
 F.get_camb_output(camb_out_dir=camb_dir)
 radii = F.get_updated_radii()
 radii = radii[::10]
-F.get_bins(lmin=2, lmax=10, load=False, verbose=True)
-F.get_beta(func='equilateral', load=False, verbose=True, radii=radii)
+F.get_bins(lmin=2, lmax=10, load=True, verbose=True)
+F.get_beta(func='equilateral', load=True, verbose=True, radii=radii)
 F.barrier()
-exit()
-F.get_binned_bispec('equilateral', load=True)
+#exit()
+F.get_binned_bispec('equilateral', load=False)
 
 # bins needs to be recomputed when kwargs dont match
 # beta needs to be recomputed when kwargs, radii, ks, transfers do not match

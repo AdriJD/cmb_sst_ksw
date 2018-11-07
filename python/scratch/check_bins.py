@@ -10,7 +10,7 @@ import os
 import numpy as np
 from scipy.special import spherical_jn
 sys.path.insert(0,'./../')
-import fisher
+from sst import Fisher
 
 opj = os.path.join
 
@@ -19,12 +19,12 @@ def bin_test(parity, bins=None, lmin=2, lmax=23):
     Init bins, run over them and test them.
     '''
 
-
-    F = fisher.Fisher()
+    base_dir = '/mn/stornext/d8/ITA/spider/adri/analysis/20181025_sst/test/precomputed'
+    F = Fisher(base_dir)
 
     F.init_bins(lmin=lmin, lmax=lmax, parity=parity, bins=bins)
 
-    bins = F.bins
+    bins = F.bins['bins']
     pint = 1 if parity == 'odd' else 0
 
     if F.mpi_rank == 0:
@@ -34,8 +34,8 @@ def bin_test(parity, bins=None, lmin=2, lmax=23):
                 i2 += i1
                 for i3, b3 in enumerate(bins[i2:]):
                     i3 += i2
-                    ell1, ell2, ell3 = F.first_pass[i1,i2,i3]
-                    num = F.num_pass[i1,i2,i3]
+                    ell1, ell2, ell3 = F.bins['first_pass'][i1,i2,i3]
+                    num = F.bins['num_pass'][i1,i2,i3]
                     try:
                         if num == 0:
                             assert (ell1, ell2, ell3) == (0,0,0) 
@@ -79,18 +79,18 @@ def bin_test(parity, bins=None, lmin=2, lmax=23):
                         print 'error in bin:'
                         print 'bin_idx: ({},{},{}), bin: ({},{},{}), no. gd_tuples: {}, '\
                             'u_ell: ({},{},{})'.format(i1, i2, i3, b1, b2, b3, 
-                                                       F.num_pass[i1,i2,i3], 
+                                                       F.bins['num_pass'][i1,i2,i3], 
                                                        ell1, ell2, ell3)
                         raise
                 
-        print 'bins: ', F.bins
-        print 'lmin: ', F.lmin
-        print 'lmax: ', F.lmax
-        print 'sum num_pass: ', np.sum(F.num_pass)
-        print 'unique_ells: ', F.unique_ells
-        print 'num bins: ', F.bins.size
-        print 'shape num_pass: ', F.num_pass.shape
-        print 'shape first_pass: ', F.first_pass.shape, '\n'
+        print 'bins: ', F.bins['bins']
+        print 'lmin: ', F.bins['lmin']
+        print 'lmax: ', F.bins['lmax']
+        print 'sum num_pass: ', np.sum(F.bins['num_pass'])
+        print 'unique_ells: ', F.bins['unique_ells']
+        print 'num bins: ', F.bins['bins'].size
+        print 'shape num_pass: ', F.bins['num_pass'].shape
+        print 'shape first_pass: ', F.bins['first_pass'].shape, '\n'
 
 if __name__ == '__main__':
     

@@ -56,7 +56,8 @@ class PreCalc(instr.MPIBase):
 
     def __del__(self):
         ''' Force all ranks to stop after keyboard interrupt.'''
-        self._comm.Abort()
+        if self.mpi:
+            self._comm.Abort()
 
     def get_camb_output(self, camb_out_dir='.', high_ell=False,
                         interp_factor=None, **kwargs):
@@ -338,6 +339,56 @@ class PreCalc(instr.MPIBase):
 
         return bins
 
+    def _scatter_bins(self):
+        ''' 
+        Scatter bins and make every rank know
+        bins on other ranks. 
+        '''
+
+        bins = self.bins['bins']
+        idx = np.arange(bins.size)        
+
+        idxs_on_rank = {}
+        bins_on_rank = {}
+
+        for rank in xrange(self.mpi_size):
+            idxs_on_rank[str(rank)] = idx[rank::self.mpi_size]
+            bins_on_rank[str(rank)] = bins[rank::self.mpi_size]
+
+        self.bins['bins_on_rank'] = bins_on_rank
+        self.bins['idxs_on_rank'] = idxs_on_rank
+        
+    def get_bins_on_rank(self, return_idx=False, rank=None):
+        '''
+        Return bins on rank.
+        
+        Keyword arguments
+        -----------------
+        return_idx : bool
+            Also return indices to full-sized bins array
+        rank : int, None
+            If None use rank from which function is called.
+            (default : None)
+
+        Returns
+        -------
+        bins_on_rank : array_like
+            Subset of bins, unique per rank
+        idxs_on_rank : array_like
+            If return_idx is set. Indices of local bins
+            in full-sized bins array.       
+        '''
+        if rank is None:
+            rank = self.mpi_rank
+
+        bins_on_rank = self.bins['bins_on_rank'][str(rank)]
+
+        if return_idx is False:
+            return bins_on_rank
+        else:
+            idxs_on_rank = self.bins['idxs_on_rank'][str(rank)]
+            return bins_on_rank, idxs_on_rank
+
     def init_bins(self, lmin=None, lmax=None,
                   bins=None, parity='odd',
                   verbose=False):
@@ -442,26 +493,30 @@ class PreCalc(instr.MPIBase):
         if self.mpi_rank == 0 and verbose:
             print('initializing bins...')
 
-        bins_sub = bins[self.mpi_rank::self.mpi_size]
+#        bins_sub = bins[self.mpi_rank::self.mpi_size]
         # bin indices per rank
-        idx_sub = np.arange(bins.size)[self.mpi_rank::self.mpi_size]
+#        idx_sub = np.arange(bins.size)[self.mpi_rank::self.mpi_size]
+
+#        bins_on_rank, idx_on_rank = self._scatter_bins(return_idx=True)
+        self._scatter_bins()
+        bins_on_rank, idxs_on_rank = self.get_bins_on_rank(return_idx=True)
 
         # Allocate these arrays only for bins in rank.
         # allocate space for number of good tuples per 3d bin
-        num_pass = np.zeros((bins_sub.size, num_bins, num_bins),
+        num_pass = np.zeros((bins_on_rank.size, num_bins, num_bins),
                             dtype=int)
         # allocate space for first good tuple per 3d bin
-        first_pass = np.zeros((bins_sub.size, num_bins, num_bins, 3),
+        first_pass = np.zeros((bins_on_rank.size, num_bins, num_bins, 3),
                               dtype=int)
 
-        for idx1, idx1_full in enumerate(idx_sub):
+        for idx1, idx1_full in enumerate(idxs_on_rank):
             # Note, idx1 is index to this ranks bin arrays only.
             # idx1_full = index to full bins array.
             bin1 = bins[idx1_full]
 
             if self.mpi_rank == 0 and verbose:
                 sys.stdout.write('\r'+'bidx: {}/{}'.format(
-                    idx1+1, idx_sub.size))
+                    idx1+1, idxs_on_rank.size))
             try:
                 lmax1 = bins[idx1_full + 1] - 1
             except IndexError:
@@ -547,8 +602,13 @@ class PreCalc(instr.MPIBase):
                                               dtype=int)
 
                     # Fill with arrays on root.
-                    num_pass_rec[self.mpi_rank::self.mpi_size] = num_pass
-                    first_pass_rec[self.mpi_rank::self.mpi_size] = first_pass
+
+                    _, idxs_on_root = self.get_bins_on_rank(
+                        return_idx=True)
+#                    num_pass_rec[self.mpi_rank::self.mpi_size] = num_pass
+#                    first_pass_rec[self.mpi_rank::self.mpi_size] = first_pass
+                    num_pass_rec[idxs_on_root] = num_pass
+                    first_pass_rec[idxs_on_root] = first_pass
 
                 # loop over all non-root ranks
                 for rank in xrange(1, self.mpi_size):
@@ -561,15 +621,17 @@ class PreCalc(instr.MPIBase):
                         if verbose:
                             print(self.mpi_rank, 'sent')
 
+                    # Receive the arrays on root.
                     if self.mpi_rank == 0:
 
-                        num_bins_sub = bins[rank::self.mpi_size].size
+#                        num_bins_on_rank = bins[rank::self.mpi_size].size
+                        _, idxs_on_rank = self.get_bins_on_rank(return_idx=True)
+                        num_bins_on_rank = idxs_on_rank.size
                         # MPI needs contiguous array to receive.
-                        num_pass_rec_cont = np.empty((num_bins_sub, num_bins,
+                        num_pass_rec_cont = np.empty((num_bins_on_rank, num_bins,
                                                       num_bins), dtype=int)
-                        first_pass_rec_cont = np.empty((num_bins_sub, num_bins,
+                        first_pass_rec_cont = np.empty((num_bins_on_rank, num_bins,
                                                         num_bins, 3), dtype=int)
-
 
                         self._comm.Recv(num_pass_rec_cont,
                                         source=rank, tag=rank)
@@ -577,9 +639,13 @@ class PreCalc(instr.MPIBase):
                                         source=rank, tag=rank + self.mpi_size)
                         if verbose:
                             print('root received {}'.format(rank))
+                            
+                        # Change to fancy indexing: num_pass_rec[[bins],...] = ..
+#                        num_pass_rec[rank::self.mpi_size] = num_pass_rec_cont
+#                        first_pass_rec[rank::self.mpi_size] = first_pass_rec_cont
+                        num_pass_rec[idxs_on_rank] = num_pass_rec_cont
+                        first_pass_rec[idxs_on_rank] = first_pass_rec_cont
 
-                        num_pass_rec[rank::self.mpi_size] = num_pass_rec_cont
-                        first_pass_rec[rank::self.mpi_size] = first_pass_rec_cont
 
                 if self.mpi_rank == 0:
                     num_pass = num_pass_rec
@@ -587,6 +653,13 @@ class PreCalc(instr.MPIBase):
                 else:
                     num_pass = None
                     first_pass = None
+
+                # no broadcast implemented
+                # NOTE do you really want to do that?
+                # Why not keep them scattered?
+
+                # first check what things have to be changed to binned_B
+                
 
             elif method1:
                 # use mpi allreduce to sum num_pass
@@ -665,15 +738,15 @@ class PreCalc(instr.MPIBase):
                         first_pass[mask2,:] = first_pass_rec[mask2,:]
 
                 # broadcast full arrays to all ranks
-                # NOTE do you really want to do that?
-                # Why not keep them scattered?
-
                 num_pass = self.broadcast_array(num_pass)
                 first_pass = self.broadcast_array(first_pass)
 
         self.barrier()
 
         # trim away the zeros in first_pass
+        # NOTE unique_ells must have ells from all bins
+        # so move this to part where root has full array (when storing it)
+        # and broadcast it
         self.bins['unique_ells'] = np.unique(first_pass)[1:]
 
         self.bins['num_pass'] = num_pass # No. of good triplets per bin.
@@ -685,6 +758,7 @@ class PreCalc(instr.MPIBase):
         # Perhaps store bins_outer?
 
         # NOTE write arrays to disk, check if scattered?
+        # basically, root needs to have full arrays for storage.
 
 
         if self.mpi_rank == 0 and verbose:
@@ -794,9 +868,15 @@ class PreCalc(instr.MPIBase):
         Precompute I^000_lL1 and I^20-2_lL2 for all unique ells
         and \Delta L \in [-2, -1, 0, 1, 2]
 
-        Store internally as wig_s and wig_t arrays with shape:
-        (ells.size, (\Delta L = 5)). So full ells-sized array, although
-        only values in unique_ells are calculated.
+        Notes
+        -----        
+        Stored internally as wig_s and wig_t keys in bins dict.
+        Arrays have shape (ells.size, (\Delta L = 5)). So full 
+        ells-sized array, although only values in unique_ells 
+        are calculated.
+
+        For now, no parallel computations, it is not really 
+        needed.
         '''
 
         u_ells = self.bins['unique_ells']
@@ -1488,9 +1568,9 @@ class Fisher(Template, PreCalc):
 
     def __del__(self):
         ''' Force all ranks to stop after keyboard interrupt.'''
-        self._comm.Abort()
-
-
+        if self.mpi:
+            self._comm.Abort()
+        
 #    def get_camb_output(**kwargs):
 #        '''
 #        Check for precomputed quantities.
@@ -1592,6 +1672,7 @@ class Fisher(Template, PreCalc):
         binned_bispectrum : array-like
             Shape: (nbin, nbin, nbin, npol), where npol
             is the number of polarization triplets considered.
+            Note, only on root.
         '''
 
         # loop over bins
@@ -1651,17 +1732,18 @@ class Fisher(Template, PreCalc):
         idx_outer_f = np.arange(bins_outer_f.size)
 
         # scatter
-        bins_outer = bins_outer_f[self.mpi_rank::self.mpi_size]
-        idx_outer = idx_outer_f[self.mpi_rank::self.mpi_size]
+#        bins_outer = bins_outer_f[self.mpi_rank::self.mpi_size]
+#        idx_outer = idx_outer_f[self.mpi_rank::self.mpi_size]
+        bins_on_rank, idxs_on_rank = self.get_bins_on_rank(return_idx=True)
 
-        # make every rank know idx_outer on other ranks
-        idx_per_rank = []
-        for rank in xrange(self.mpi_size):
-            idx_per_rank.append(idx_outer_f[rank::self.mpi_size])
+        # make every rank know idxs_on_rank on other ranks
+#        idx_per_rank = []
+#        for rank in xrange(self.mpi_size):
+#            idx_per_rank.append(idx_outer_f[rank::self.mpi_size])
 
         # allocate bispectrum
         nbins = bins.size
-        bispectrum = np.zeros((bins_outer.size, nbins, nbins, psize))
+        bispectrum = np.zeros((bins_on_rank.size, nbins, nbins, psize))
 
         # numerical factors that differentiate equilateral and orthogonal
         if prim_template == 'equilateral':
@@ -1673,8 +1755,8 @@ class Fisher(Template, PreCalc):
             num_b = -8.
             num_c = 3.
 
-        for idxb, (idx1, i1) in enumerate(zip(idx_outer, bins_outer)):
-            # note, idxb is bins_outer index for bispectrum per rank
+        for idxb, (idx1, i1) in enumerate(zip(idxs_on_rank, bins_on_rank)):
+            # note, idxb is bins_on_rank index for bispectrum per rank
             # idx1 is index to full-sized bin array, i1 is bin
             # load binned beta
             beta_s_l1 = beta_s[idx1,Lidx1,0,0,:,:] # (2,r.size)
@@ -2001,11 +2083,13 @@ class Fisher(Template, PreCalc):
 
             # create empty full-sized bispectrum on root
             if self.mpi_rank == 0:
-
                 bispec_full = np.zeros((bins_outer_f.size,nbins,nbins,psize))
 
-                # place sub B on root in full B for root
-                for i, fidx in enumerate(idx_per_rank[0]):
+                _, idxs_on_root = self.get_bins_on_rank(return_idx=True)
+
+                # Place sub B on root in full B for root
+#                for i, fidx in enumerate(idx_per_rank[0]):
+                for i, fidx in enumerate(idxs_on_root):
                     # i is index to sub, fidx index to full
                     bispec_full[fidx,...] = bispectrum[i,...]
 
@@ -2016,8 +2100,12 @@ class Fisher(Template, PreCalc):
             for rank in xrange(1, self.mpi_size):
 
                 if self.mpi_rank == 0:
-                    # allocate B sub on root for receiving
-                    bin_size = idx_per_rank[rank].size
+                    # The indices of the bins on the rank (on root).
+                    _, idxs_on_rank = self.get_bins_on_rank(return_idx=True,
+                                                        rank=rank)
+#                    bin_size = idx_per_rank[rank].size
+                    bin_size = idxs_on_rank.size
+                    # Allocate B sub on root for receiving.
                     bispec_rec = np.zeros((bin_size,nbins,nbins,psize))
 
                 # send bispectrum to root
@@ -2028,7 +2116,8 @@ class Fisher(Template, PreCalc):
                     self._comm.Recv(bispec_rec, source=rank, tag=rank)
 
                     # place into root bispectrum
-                    for i, fidx in enumerate(idx_per_rank[rank]):
+#                    for i, fidx in enumerate(idxs_per_rank[rank]):
+                    for i, fidx in enumerate(idxs_on_rank):
                         # i is index to sub, fidx index to full
                         bispec_full[fidx,...] = bispec_rec[i,...]
 
@@ -2180,11 +2269,12 @@ class Fisher(Template, PreCalc):
                     self.bins = None
                 self.bins = self.broadcast(self.bins)
 
-                    #def init_bins(self, lmin=None, lmax=None,
-                    #  bins=None, parity='odd',
-                    #  verbose=False):
-                    # NOTE, check if lmin, lmax, bins, parity all match
-                    # otherwise recompute
+                # We might have different number of ranks
+                # so we have to scatter bins again.
+                self._scatter_bins()
+
+                # TODO, check if lmin, lmax, bins, parity all match
+                # otherwise recompute
 
         if recompute:
             if self.mpi_rank == 0:
