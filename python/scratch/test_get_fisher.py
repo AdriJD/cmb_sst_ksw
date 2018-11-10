@@ -11,7 +11,16 @@ radii = radii[::10]
 F.get_bins(lmin=2, lmax=10, load=True, verbose=True)
 F.get_beta(func='equilateral', load=True, verbose=True, radii=radii)
 F.barrier()
-#exit()
+
+if F.mpi_rank == 0:
+    print F.bins['num_pass_full'].shape
+    print F.bins['num_pass'].shape
+else:
+    import time
+    time.sleep(3)
+    print F.bins['num_pass'].shape
+F.barrier()
+exit()
 F.get_binned_bispec('equilateral', load=False)
 
 # bins needs to be recomputed when kwargs dont match

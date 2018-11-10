@@ -647,12 +647,12 @@ class PreCalc(instr.MPIBase):
                         first_pass_rec[idxs_on_rank] = first_pass_rec_cont
 
 
-                if self.mpi_rank == 0:
-                    num_pass = num_pass_rec
-                    first_pass = first_pass_rec
-                else:
-                    num_pass = None
-                    first_pass = None
+#                if self.mpi_rank == 0:
+#                    num_pass = num_pass_rec
+#                    first_pass = first_pass_rec
+#                else:
+#                    num_pass = None
+#                    first_pass = None
 
                 # no broadcast implemented
                 # NOTE do you really want to do that?
@@ -741,25 +741,30 @@ class PreCalc(instr.MPIBase):
                 num_pass = self.broadcast_array(num_pass)
                 first_pass = self.broadcast_array(first_pass)
 
+        else:
+            # No mpi.
+            num_pass_rec = num_pass
+            first_pass_rec = first_pass
+
         self.barrier()
 
-        # trim away the zeros in first_pass
-        # NOTE unique_ells must have ells from all bins
-        # so move this to part where root has full array (when storing it)
-        # and broadcast it
-        self.bins['unique_ells'] = np.unique(first_pass)[1:]
+        if self.mpi_rank == 0:
+            self.bins['num_pass_full'] = num_pass_rec
+            self.bins['first_pass_full'] = first_pass_rec
+            # Trim away the zeros.
+            unique_ells = np.unique(first_pass_rec)[1:]
+        else:
+            unique_ells = None
+        
+        # Each rank gets full unique_ells array for wigner comp. later.
+        self.bins['unique_ells'] = self.broadcast_array(unique_ells)
 
+        # Note that these differ per rank.
         self.bins['num_pass'] = num_pass # No. of good triplets per bin.
         self.bins['first_pass'] = first_pass # Lowest good triplet per bin.
 
         self.bins['init_bins'] = True
         self.bins['bins'] = bins
-
-        # Perhaps store bins_outer?
-
-        # NOTE write arrays to disk, check if scattered?
-        # basically, root needs to have full arrays for storage.
-
 
         if self.mpi_rank == 0 and verbose:
             print('...done')
@@ -1772,7 +1777,6 @@ class Fisher(Template, PreCalc):
                 gamma_s_l1 = beta_s[idx1,Lidx1,0,3,:,:]
                 gamma_t_l1 = beta_t[idx1,Lidx1,0,3,:,:]
 
-
             for idx2, i2 in enumerate(bins[idx1:]):
                 idx2 += idx1
 
@@ -1789,7 +1793,6 @@ class Fisher(Template, PreCalc):
 
                     gamma_s_l2 = beta_s[idx2,Lidx2,0,3,:,:]
                     gamma_t_l2 = beta_t[idx2,Lidx2,0,3,:,:]
-
 
                 for idx3, i3 in enumerate(bins[idx2:]):
                     idx3 += idx2
@@ -2159,9 +2162,11 @@ class Fisher(Template, PreCalc):
                 print('working on DL1, DL2, DL3:', L_tup)
 
             if Lidx == 0:
-                binned_bispec = self._binned_bispectrum(*L_tup, prim_template=prim_template)
+                binned_bispec = self._binned_bispectrum(*L_tup, 
+                                    prim_template=prim_template)
             else:
-                binned_bispec += self._binned_bispectrum(*L_tup, prim_template=prim_template)
+                binned_bispec += self._binned_bispectrum(*L_tup,
+                                    prim_template=prim_template)
 
         return binned_bispec
 
@@ -2203,9 +2208,12 @@ class Fisher(Template, PreCalc):
 
             if recompute is False:
                 # Succesfully loaded on root, so broadcast.
-                if self.mpi_rank != 0:
-                    self.bispec = None
-                self.bispec = self.broadcast(self.bispec)
+                # NOTE do you want to do this?
+                # for now, leave on root.
+                #if self.mpi_rank != 0:
+                #    self.bispec = None
+                #self.bispec = self.broadcast(self.bispec)
+                pass
 
 
         if recompute:
@@ -2248,7 +2256,10 @@ class Fisher(Template, PreCalc):
         recompute = not load
 
         if load:
-            if self.mpi_rank == 0:
+            if self.mpi_rank != 0:
+                self.bins = None
+
+            elif self.mpi_rank == 0:
                 # Loading and printing on root.
                 try:
                     pkl_file = open(bins_file, 'rb')
@@ -2264,15 +2275,68 @@ class Fisher(Template, PreCalc):
             recompute = self.broadcast(recompute)
 
             if recompute is False:
-                # Succesfully loaded on root, so broadcast.
-                if self.mpi_rank != 0:
-                    self.bins = None
+                # Succesfully loaded on root.
+                
+                # Do not broadcast full-sized arrays to save memory.
+                if self.mpi_rank == 0:
+                    num_pass_full = self.bins.pop('num_pass_full')
+                    first_pass_full = self.bins.pop('first_pass_full')
+
                 self.bins = self.broadcast(self.bins)
+
+                if self.mpi_rank == 0:
+                    self.bins['num_pass_full'] = num_pass_full
+                    self.bins['first_pass_full'] = first_pass_full
 
                 # We might have different number of ranks
                 # so we have to scatter bins again.
                 self._scatter_bins()
 
+                # Scatter num_pass and first pass.
+                for rank in xrange(1, self.mpi_size):
+                    if self.mpi_rank == 0:
+                        # Extract slices corresponding to rank.
+                        _, idxs_on_rank = self.get_bins_on_rank(
+                            return_idx=True, rank=rank)
+                        num_pass2send = num_pass_full[idxs_on_rank,...]
+                        first_pass2send = first_pass_full[idxs_on_rank,...]
+                        
+                        if rank != 0:
+                            self._comm.Send(num_pass2send, dest=rank, tag=rank)
+                            self._comm.Send(first_pass2send, dest=rank,
+                                            tag=rank + self.mpi_size)
+
+                        if kwargs.get('verbose', False):
+                            print('root sent to {}'.format(rank))
+
+                    # Receive the arrays on the rank.
+                    if self.mpi_rank == rank:
+
+                        _, idxs_on_rank = self.get_bins_on_rank(return_idx=True)
+                        num_bins_on_rank = idxs_on_rank.size
+                        num_bins = self.bins['bins'].size
+                        # MPI needs contiguous array to receive.
+                        num_pass_rec = np.empty((num_bins_on_rank, num_bins,
+                                                      num_bins), dtype=int)
+                        first_pass_rec = np.empty((num_bins_on_rank, num_bins,
+                                                        num_bins, 3), dtype=int)
+                        self._comm.Recv(num_pass_rec,
+                                        source=0, tag=rank)
+                        self._comm.Recv(first_pass_rec,
+                                        source=0, tag=rank + self.mpi_size)
+                        if kwargs.get('verbose', False):
+                            print('rank {} received'.format(rank))
+
+
+                if self.mpi_rank == 0:
+                    _, idxs_on_rank = self.get_bins_on_rank(
+                        return_idx=True)
+                    num_pass_rec = num_pass_full[idxs_on_rank,...]
+                    first_pass_rec = first_pass_full[idxs_on_rank,...]
+                        
+                self.bins['num_pass'] = num_pass_rec
+                self.bins['first_pass'] = first_pass_rec
+                    
                 # TODO, check if lmin, lmax, bins, parity all match
                 # otherwise recompute
 
