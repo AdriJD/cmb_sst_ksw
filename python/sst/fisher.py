@@ -1680,13 +1680,12 @@ class Fisher(Template, PreCalc):
             Note, only on root.
         '''
 
-        # loop over bins
         bins = self.bins['bins']
         ells = self.bins['ells']
         lmin = ells[0]
+
+        # Note that these are different per rank.
         num_pass = self.bins['num_pass']
-        # convert to float
-        num_pass = num_pass.astype(float)
         first_pass = self.bins['first_pass']
 
         wig_t = self.bispec['wig_t']
@@ -1696,8 +1695,6 @@ class Fisher(Template, PreCalc):
         psize = pol_trpl.shape[0]
 
         # binned betas
-#        beta_s = self.depo['scalar']['b_beta']
-#        beta_t = self.depo['tensor']['b_beta']
         beta_s = self.beta['b_beta_s']
         beta_t = self.beta['b_beta_t']
 
@@ -1736,15 +1733,7 @@ class Fisher(Template, PreCalc):
         bins_outer_f = bins.copy() # f = full
         idx_outer_f = np.arange(bins_outer_f.size)
 
-        # scatter
-#        bins_outer = bins_outer_f[self.mpi_rank::self.mpi_size]
-#        idx_outer = idx_outer_f[self.mpi_rank::self.mpi_size]
         bins_on_rank, idxs_on_rank = self.get_bins_on_rank(return_idx=True)
-
-        # make every rank know idxs_on_rank on other ranks
-#        idx_per_rank = []
-#        for rank in xrange(self.mpi_size):
-#            idx_per_rank.append(idx_outer_f[rank::self.mpi_size])
 
         # allocate bispectrum
         nbins = bins.size
@@ -1797,7 +1786,8 @@ class Fisher(Template, PreCalc):
                 for idx3, i3 in enumerate(bins[idx2:]):
                     idx3 += idx2
 
-                    num = num_pass[idx1, idx2, idx3]
+#                    num = num_pass[idx1, idx2, idx3]
+                    num = num_pass[idxb, idx2, idx3]
                     if num == 0.:
                         # No valid ell tuples in this bin
                         # Note: do not impose conditions on
@@ -1819,10 +1809,13 @@ class Fisher(Template, PreCalc):
                         gamma_t_l3 = beta_t[idx3,Lidx3,0,3,:,:]
 
                     # Load the ell triplets used per bin
-                    ell1, ell2, ell3 = first_pass[idx1, idx2, idx3,:]
+#                    ell1, ell2, ell3 = first_pass[idx1, idx2, idx3,:]
+                    ell1, ell2, ell3 = first_pass[idxb, idx2, idx3,:]
 
                     if ell1 < 2 or ell2 < 2 or ell3 < 2:
-                        raise ValueError("ells are wrong")
+                        raise ValueError("ells are wrong: ell1: {}, "
+                                         "ell2: {}, ell3: {}".format(
+                                             ell1, ell2, ell3))
 
                     # indices to full-size ell arrays
                     lidx1 = ell1 - lmin
@@ -2073,7 +2066,7 @@ class Fisher(Template, PreCalc):
                         # Note that for plotting purposes, you need to remove
                         # the num factor again
                         # Note, in Fisher, num cancels with binned (Cl)^-1's
-                        bispec *= num
+                        bispec *= float(num)
 
                         bispectrum[idxb,idx2,idx3,pidx] = bispec
 
@@ -2091,7 +2084,6 @@ class Fisher(Template, PreCalc):
                 _, idxs_on_root = self.get_bins_on_rank(return_idx=True)
 
                 # Place sub B on root in full B for root
-#                for i, fidx in enumerate(idx_per_rank[0]):
                 for i, fidx in enumerate(idxs_on_root):
                     # i is index to sub, fidx index to full
                     bispec_full[fidx,...] = bispectrum[i,...]
@@ -2106,7 +2098,6 @@ class Fisher(Template, PreCalc):
                     # The indices of the bins on the rank (on root).
                     _, idxs_on_rank = self.get_bins_on_rank(return_idx=True,
                                                         rank=rank)
-#                    bin_size = idx_per_rank[rank].size
                     bin_size = idxs_on_rank.size
                     # Allocate B sub on root for receiving.
                     bispec_rec = np.zeros((bin_size,nbins,nbins,psize))
@@ -2119,7 +2110,6 @@ class Fisher(Template, PreCalc):
                     self._comm.Recv(bispec_rec, source=rank, tag=rank)
 
                     # place into root bispectrum
-#                    for i, fidx in enumerate(idxs_per_rank[rank]):
                     for i, fidx in enumerate(idxs_on_rank):
                         # i is index to sub, fidx index to full
                         bispec_full[fidx,...] = bispec_rec[i,...]

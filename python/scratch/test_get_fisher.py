@@ -12,17 +12,14 @@ F.get_bins(lmin=2, lmax=10, load=True, verbose=True)
 F.get_beta(func='equilateral', load=True, verbose=True, radii=radii)
 F.barrier()
 
-if F.mpi_rank == 0:
-    print F.bins['num_pass_full'].shape
-    print F.bins['num_pass'].shape
-else:
-    import time
-    time.sleep(3)
-    print F.bins['num_pass'].shape
+#b = F.bins['num_pass'].astype(bool)
+#print F.bins['first_pass'][b]
+#exit()
 F.barrier()
-exit()
 F.get_binned_bispec('equilateral', load=False)
 
+if F.mpi_rank == 0:
+    print F.bispec['bispec'][4,:,:,0]
 # bins needs to be recomputed when kwargs dont match
 # beta needs to be recomputed when kwargs, radii, ks, transfers do not match
 # bispec only needs to be recomputed when template doesnt match.
