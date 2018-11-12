@@ -605,8 +605,6 @@ class PreCalc(instr.MPIBase):
 
                     _, idxs_on_root = self.get_bins_on_rank(
                         return_idx=True)
-#                    num_pass_rec[self.mpi_rank::self.mpi_size] = num_pass
-#                    first_pass_rec[self.mpi_rank::self.mpi_size] = first_pass
                     num_pass_rec[idxs_on_root] = num_pass
                     first_pass_rec[idxs_on_root] = first_pass
 
@@ -624,8 +622,8 @@ class PreCalc(instr.MPIBase):
                     # Receive the arrays on root.
                     if self.mpi_rank == 0:
 
-#                        num_bins_on_rank = bins[rank::self.mpi_size].size
-                        _, idxs_on_rank = self.get_bins_on_rank(return_idx=True)
+                        _, idxs_on_rank = self.get_bins_on_rank(return_idx=True,
+                                                                rank=rank)
                         num_bins_on_rank = idxs_on_rank.size
                         # MPI needs contiguous array to receive.
                         num_pass_rec_cont = np.empty((num_bins_on_rank, num_bins,
@@ -641,25 +639,8 @@ class PreCalc(instr.MPIBase):
                             print('root received {}'.format(rank))
                             
                         # Change to fancy indexing: num_pass_rec[[bins],...] = ..
-#                        num_pass_rec[rank::self.mpi_size] = num_pass_rec_cont
-#                        first_pass_rec[rank::self.mpi_size] = first_pass_rec_cont
                         num_pass_rec[idxs_on_rank] = num_pass_rec_cont
                         first_pass_rec[idxs_on_rank] = first_pass_rec_cont
-
-
-#                if self.mpi_rank == 0:
-#                    num_pass = num_pass_rec
-#                    first_pass = first_pass_rec
-#                else:
-#                    num_pass = None
-#                    first_pass = None
-
-                # no broadcast implemented
-                # NOTE do you really want to do that?
-                # Why not keep them scattered?
-
-                # first check what things have to be changed to binned_B
-                
 
             elif method1:
                 # use mpi allreduce to sum num_pass
@@ -944,7 +925,7 @@ class PreCalc(instr.MPIBase):
             Do no calculate spherical bessel for kr << L (default :
             True)
         interp_factor : int, None
-            Factor of extra point in k-dimension of tranfer function
+            Factor of extra point in k-dimension of transfer function
             calculated by cubic interpolation.
         sparse : bool
             Calculate beta over multipoles given by bins, then
