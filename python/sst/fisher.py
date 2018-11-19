@@ -54,10 +54,10 @@ class PreCalc(instr.MPIBase):
         wig.wig_table_init(2 * 8000, 9)
         wig.wig_temp_init(2 * 8000)
 
-    def __del__(self):
-        ''' Force all ranks to stop after keyboard interrupt.'''
-        if self.mpi:
-            self._comm.Abort()
+#    def __del__(self):
+#        ''' Force all ranks to stop after keyboard interrupt.'''
+#        if self.mpi:
+#            self._comm.Abort()
 
     def get_camb_output(self, camb_out_dir='.', high_ell=False,
                         interp_factor=None, **kwargs):
@@ -1552,10 +1552,10 @@ class Fisher(Template, PreCalc):
 
         super(Fisher, self).__init__(**kwargs)
 
-    def __del__(self):
-        ''' Force all ranks to stop after keyboard interrupt.'''
-        if self.mpi:
-            self._comm.Abort()
+#    def __del__(self):
+#        ''' Force all ranks to stop after keyboard interrupt.'''
+#        if self.mpi:
+#            self._comm.Abort()
         
 #    def get_camb_output(**kwargs):
 #        '''
@@ -2158,7 +2158,8 @@ class Fisher(Template, PreCalc):
         '''
 
         path = self.subdirs['precomputed']
-        bispec_file = opj(path, 'bispec.pkl')
+#        bispec_file = opj(path, 'bispec.pkl')
+        bispec_file = opj(path, 'bispec_{}.pkl'.format(prim_template))
         recompute = not load
 
         if load:
@@ -2409,6 +2410,8 @@ class Fisher(Template, PreCalc):
         -----
 
         '''
+
+        # paste function from get_fisher_new.py
 
     def interp_fisher(self):
         '''
