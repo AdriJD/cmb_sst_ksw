@@ -2,6 +2,7 @@ import os
 import numpy as np
 from sst import Fisher
 from sst import camb_tools as ct
+from sst import plot_tools
 
 opj = os.path.join
 
@@ -140,14 +141,15 @@ def get_totcov(cls, nls, no_ee=False, no_tt=False):
     totcov[:4,:] += cls
 
     if no_ee:
-        totcov[1,:] += 1e12
+        totcov[1,:] = 1e12
     if no_tt:
-        totcov[0,:] += 1e12
+        totcov[0,:] = 1e12
 
     return totcov
 
-def run_fisher(template, ana_dir, camb_dir, totcov, lmin=2, lmax=4999,fsky=0.03):
-
+def run_fisher(template, ana_dir, camb_dir, totcov, lmin=2, lmax=4999,fsky=0.03, 
+               plot_tag=''):
+    
     F = Fisher(ana_dir)
     camb_opts = dict(camb_out_dir=camb_dir,
                      tag='r0',
@@ -168,13 +170,23 @@ def run_fisher(template, ana_dir, camb_dir, totcov, lmin=2, lmax=4999,fsky=0.03)
     bin_invcov = F.bin_invcov
     bin_cov = F.bin_cov
 
-
-
-
     bin_size = F.bins['bins'].size
     bins = F.bins['bins']
     num_pass = F.bins['num_pass_full']
     bispec = F.bispec['bispec']
+
+    # Plot invcov, cov
+    plot_opts = dict(lmin=2)
+    plot_tools.cls_matrix(plot_tag, bins, bin_invcov, log=False, plot_dell=False,
+                          inv=True, **plot_opts)
+    plot_tools.cls_matrix(plot_tag.replace('invcov', 'cov_dell'),
+                          bins, bin_cov, log=False, plot_dell=True,
+                          **plot_opts)
+    plot_tools.cls_matrix(plot_tag.replace('invcov', 'cov'),
+                          bins, bin_cov, log=False, plot_dell=False, 
+                          **plot_opts)
+    
+    return None, None
 
     # allocate bin-sized fisher matrix (same size as outer loop)
     fisher_per_bin = np.ones(bin_size) * np.nan
@@ -313,6 +325,7 @@ if __name__ == '__main__':
                 nls *= 0.
             totcov = get_totcov(cls, nls, no_ee=no_ee, no_tt=no_tt)
 
+            plot_name = opj(out_dir, 'b_invcov_{}.png'.format(key))
 
             for template in ['local', 'equilateral', 'orthogonal']:            
                 text_file.write('template: {}\n'.format(template))
@@ -323,7 +336,9 @@ if __name__ == '__main__':
 
                 fisher_check, sigma = run_fisher(template, 
                                 ana_dir, camb_dir, totcov, 
-                                lmin=lmin, lmax=lmax, fsky=fsky)
+                                lmin=lmin, lmax=lmax, fsky=fsky, 
+                                plot_tag=plot_name)
+
                 text_file.write('fisher_check: {}\n'.format(fisher_check))
                 text_file.write('sigma: {}\n'.format(sigma))
                 text_file.write('\n')

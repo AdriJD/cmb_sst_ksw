@@ -54,11 +54,6 @@ class PreCalc(instr.MPIBase):
         wig.wig_table_init(2 * 8000, 9)
         wig.wig_temp_init(2 * 8000)
 
-#    def __del__(self):
-#        ''' Force all ranks to stop after keyboard interrupt.'''
-#        if self.mpi:
-#            self._comm.Abort()
-
     def get_camb_output(self, camb_out_dir='.', high_ell=False,
                         interp_factor=None, **kwargs):
         '''
@@ -493,11 +488,6 @@ class PreCalc(instr.MPIBase):
         if self.mpi_rank == 0 and verbose:
             print('initializing bins...')
 
-#        bins_sub = bins[self.mpi_rank::self.mpi_size]
-        # bin indices per rank
-#        idx_sub = np.arange(bins.size)[self.mpi_rank::self.mpi_size]
-
-#        bins_on_rank, idx_on_rank = self._scatter_bins(return_idx=True)
         self._scatter_bins()
         bins_on_rank, idxs_on_rank = self.get_bins_on_rank(return_idx=True)
 
@@ -602,7 +592,6 @@ class PreCalc(instr.MPIBase):
                                               dtype=int)
 
                     # Fill with arrays on root.
-
                     _, idxs_on_root = self.get_bins_on_rank(
                         return_idx=True)
                     num_pass_rec[idxs_on_root] = num_pass
@@ -750,105 +739,6 @@ class PreCalc(instr.MPIBase):
         if self.mpi_rank == 0 and verbose:
             print('...done')
 
-    def get_binned_invcov(self, bins=None, ells=None, nls_tot=None):
-        '''
-        Combine signal and noise into an inverse cov matrix
-        per bin. We first bin, then compute inverse.
-
-        Keyword Arguments
-        -----------------
-        bins : array-like
-        ells : array-like
-            lmax >= bins[-1]
-        nls_tot : array-like
-            Total covariance (Cl + Nl). Shape: (6, ells.size) in
-            order: TT, EE, BB, TE, TB, EB
-
-        Notes
-        -----
-        Stores shape = (ells, 3, 3) array. ells is unbinned.
-        '''
-
-        if ells is None:
-            ells = self.bins['ells']
-
-        if bins is None:
-            bins = self.bins['bins']
-
-        if not np.array_equal(ells, np.unique(ells)):
-            raise ValueError('ells not monotonically increasing with Dl=1')
-
-        if not ells[-1] >= bins[-1]:
-            raise ValueError('lmax smaller than max bin')
-
-        indices = np.digitize(ells, bins, right=False) - 1
-
-        lmin = ells[0]
-        lmax = ells[-1]
-
-        if nls_tot is None:
-
-            # get signal and noise from depo
-            # eventually remove this probably
-            cls = self.depo['cls'] # Signal, lmin = 2
-            nls = self.depo['nls'] # Noise
-
-            # to not mess up nls with cls later on
-            nls = nls.copy()
-            cls = cls.copy()
-
-            # assume nls start at lmin, cls at ell=2
-            # NOTE, for new noise, noise also starts at ell=2 ?
-            nls = nls[:,:(lmax - lmin + 1)]
-            cls = cls[:,lmin-2:lmax-1]
-
-            # Add signal cov to noise (cls for TB and TE not present in cls)
-            nls[:4,:] += cls
-            nls = nls_tot
-
-        bin_cov = np.ones((bins.size, 3, 3))
-        bin_cov *= np.nan
-        bin_invcov = bin_cov.copy()
-
-        nls_dict = {'TT': 0, 'EE': 1, 'BB': 2, 'TE': 3,
-                    'ET': 3, 'BT': 4, 'TB': 4, 'EB': 5,
-                    'BE': 5}
-
-        # float array with bins + (lmax + 0.1) for binned_stat
-        # binned_stat output is one less than input bins size
-        bins_ext = np.empty(bins.size + 1, dtype=float)
-        bins_ext[:-1] = bins
-        bins_ext[-1] = lmax + 0.1
-
-        for pidx1, pol1 in enumerate(['T', 'E', 'B']):
-            for pidx2, pol2 in enumerate(['T', 'E', 'B']):
-
-                # Cl+Nl array
-                nidx = nls_dict[pol1+pol2]
-                nell = nls_tot[nidx,:]
-
-                # Bin
-                bin_cov[:,pidx1,pidx2], _, _ = binned_statistic(ells, nell,
-                                                             statistic='mean',
-                                                             bins=bins_ext)
-
-        # Invert
-        for bidx in xrange(bins.size):
-            bin_invcov[bidx,:] = inv(bin_cov[bidx,:])
-
-        # Expand binned inverse cov and cov to full size again
-        invcov = np.ones((ells.size, 3, 3))
-        invcov *= np.nan
-        cov = invcov.copy()
-        invcov[:] = bin_invcov[indices,:]
-        cov[:] = bin_cov[indices,:]
-
-        self.invcov = invcov
-        self.cov = cov
-        self.bin_cov = bin_cov
-        self.bin_invcov = bin_invcov
-        self.nls = nls_tot
-
     def init_wig3j(self):
         '''
         Precompute I^000_lL1 and I^20-2_lL2 for all unique ells
@@ -933,6 +823,8 @@ class PreCalc(instr.MPIBase):
         verbose : bool
             Print progress (default : False)
         '''
+
+        # NOTE: sparse=True with hihg camb ells must use ells from bins to interpolate
 
         if not self.bins['init_bins']:
             raise ValueError('bins not initialized')
@@ -1077,7 +969,7 @@ class PreCalc(instr.MPIBase):
 
                 if self.mpi_rank == 0 and verbose:
                     sys.stdout.write('\r'+'lidx: {}/{}, ell: {}'.format(
-                        lidx, ells_size-1, ell))
+                        lidx_b, ells_size-1, ell))
                 for Lidx, L in enumerate(L_range):
                     L = ell + L
                     if L < 0:
@@ -1379,13 +1271,11 @@ class Template(object):
     Create arrays of shape (nfact, 3, k.size)
     '''
 
-    def __init__(self, template='local', **kwargs):
+    def __init__(self, **kwargs):
         '''
 
         Keyword Arguments
         -----------------
-        template : str
-            Which template, either local, equilateral or orthogonal
         kwargs : {MPIBase_opts}
 
         Notes
@@ -1401,7 +1291,7 @@ class Template(object):
 
         For local we only need alpha and beta.
         For equilateral and orthgonal we need alpha, beta, gamma, delta
-        (see creminelli 2005).
+        (see Creminelli et al. 2005).
         '''
 
         # You don't have to get primordial parameters from CAMB
@@ -1413,10 +1303,6 @@ class Template(object):
         self.common_amp = 16 * np.pi**4 * self.scalar_amp**2
 
         super(Template, self).__init__(**kwargs)
-
-        # TODO: add attribute that tells you which template is used
-        # load up template based on choice in init
-        self.template = template
 
     def local(self, k, fnl=1):
         '''
@@ -1515,30 +1401,30 @@ class Fisher(Template, PreCalc):
 
         Keyword Arguments
         -----------------
-        camb_opts
-        beta_opts
-        bin_opts
-
         kwargs : {MPIBase_opts}
 
 
         Notes
         -----
-        >> F = Fisher()
+        Will create "precomputed" and "fisher" directories
+        in specified working directory if not present already.
+
+        Example run:
+
+        >> F = Fisher('.')
         >> F.get_camb_output(camb_out_dir=camb_dir)
         >> F.get_bins(*kwargs)
         >> F.get_beta(**kwargs)
         >> F.get_binned_bispec('equilateral') # Precomputes beta
         >> fisher = F.interp_fisher()
-        >> Do stuff
-        >> F.compute_binned_bispec('equilateral')
-
         '''
 
+        super(Fisher, self).__init__(**kwargs)
 
-        if not os.path.exists(base_dir):
-            raise ValueError('base_dir not found')
-        self.base_dir = base_dir
+        if self.mpi_rank == 0:
+            if not os.path.exists(base_dir):
+                raise ValueError('base_dir not found')
+            self.base_dir = base_dir
 
         # Create subdirectories.
         self.subdirs = {}
@@ -1546,65 +1432,9 @@ class Fisher(Template, PreCalc):
 
         for sdir in sdirs:
             self.subdirs[sdir] = opj(base_dir, sdir)
-
-            if not os.path.exists(self.subdirs[sdir]):
-                os.makedirs(self.subdirs[sdir])
-
-        super(Fisher, self).__init__(**kwargs)
-
-#    def __del__(self):
-#        ''' Force all ranks to stop after keyboard interrupt.'''
-#        if self.mpi:
-#            self._comm.Abort()
-        
-#    def get_camb_output(**kwargs):
-#        '''
-#        Check for precomputed quantities.
-#        '''
-
-#        rerun = False
-#        items = ['transfer', 'lmax', 'k']
-#        if kwargs.get('high_ell', False):
-#            items += 'ell'
-
-#        for ttype in ['scalar', 'tensor']:
-#            for item in items:
-#                try:
-#                    pass
-#                except:
-                    # file cannot be opened, print and
-                    # recompute
-                    # place into depo
-#                    recompute = True
-#                    break
-
-#        if recompute:
-#            super(Fisher, self).get_camb_output(**kwargs)
-
-            # Write quanitites to disk
-
-
-#            self.depo[ttype] = {'transfer' : tr,
-#                                'lmax' : lmax,
-#                                'k' : k,
-#                                'ells_sparse' : ells} # None normally
-
-
-#        F.get_camb_output(**camb_opts)
-#        F.init_bins(lmin=lmin, lmax=lmax,
-#                    parity='odd', verbose=True)
-#        F.init_wig3j()
-#        bins = F.bins
-
-#        radii = F.get_updated_radii()
-
-#        if prim_template == 'local':
-#            f, _ = F.local()
-#        else:
-#            f, _ = F.equilateral()
-
-#        F.beta(f=f, radii=radii, verbose=True)
-#        F.init_pol_triplets()
+            if self.mpi_rank == 0:
+                if not os.path.exists(self.subdirs[sdir]):
+                    os.makedirs(self.subdirs[sdir])
 
     def init_pol_triplets(self, single_bmode=True):
         '''
@@ -2228,10 +2058,7 @@ class Fisher(Template, PreCalc):
         recompute = not load
 
         if load:
-            if self.mpi_rank != 0:
-                self.bins = None
-
-            elif self.mpi_rank == 0:
+            if self.mpi_rank == 0:
                 # Loading and printing on root.
                 try:
                     pkl_file = open(bins_file, 'rb')
@@ -2385,6 +2212,122 @@ class Fisher(Template, PreCalc):
                     pickle.dump(self.beta, handle,
                                 protocol=pickle.HIGHEST_PROTOCOL)
 
+    def get_binned_invcov(self, bins=None, ells=None, nls_tot=None):
+        '''
+        Combine signal and noise into an inverse cov matrix
+        per bin. We first bin, then compute inverse.
+
+        Keyword Arguments
+        -----------------
+        bins : array-like
+        ells : array-like
+            lmax >= bins[-1]
+        nls_tot : array-like
+            Total covariance (Cl + Nl). Shape: (6, ells.size) in
+            order: TT, EE, BB, TE, TB, EB
+
+        Notes
+        -----
+        Stores shape = (ells, 3, 3) array. ells is unbinned.
+        '''
+
+        # if you allow nans, you can make a bad_mask and bad_mask_bin
+        # replace nans with 1s, run function, 
+        # add nans back 
+        # store masks -> useful for plotting. 
+        # populate fisher dict
+        # save cls, nls, cov, invcov, binned versions, A_lens, fsky
+
+        if ells is None:
+            ells = self.bins['ells']
+
+        if bins is None:
+            bins = self.bins['bins']
+
+        if not np.array_equal(ells, np.unique(ells)):
+            raise ValueError('ells not monotonically increasing with Dl=1')
+
+        if not ells[-1] >= bins[-1]:
+            raise ValueError('lmax smaller than max bin')
+
+        indices = np.digitize(ells, bins, right=False) - 1
+
+        lmin = ells[0]
+        lmax = ells[-1]
+
+        if nls_tot is None:
+
+            # get signal and noise from depo
+            # eventually remove this probably
+            cls = self.depo['cls'] # Signal, lmin = 2
+            nls = self.depo['nls'] # Noise
+
+            # to not mess up nls with cls later on
+            nls = nls.copy()
+            cls = cls.copy()
+
+            # assume nls start at lmin, cls at ell=2
+            # NOTE, for new noise, noise also starts at ell=2 ?
+            nls = nls[:,:(lmax - lmin + 1)]
+            cls = cls[:,lmin-2:lmax-1]
+
+            # Add signal cov to noise (cls for TB and TE not present in cls)
+            nls[:4,:] += cls
+            nls = nls_tot
+
+        bin_cov = np.ones((bins.size, 3, 3))
+        bin_cov *= np.nan
+        bin_invcov = bin_cov.copy()
+
+        nls_dict = {'TT': 0, 'EE': 1, 'BB': 2, 'TE': 3,
+                    'ET': 3, 'BT': 4, 'TB': 4, 'EB': 5,
+                    'BE': 5}
+
+        # float array with bins + (lmax + 0.1) for binned_stat
+        # binned_stat output is one less than input bins size
+        bins_ext = np.empty(bins.size + 1, dtype=float)
+        bins_ext[:-1] = bins
+        bins_ext[-1] = lmax + 0.1
+
+        for pidx1, pol1 in enumerate(['T', 'E', 'B']):
+            for pidx2, pol2 in enumerate(['T', 'E', 'B']):
+
+                # Cl+Nl array
+                nidx = nls_dict[pol1+pol2]
+                nell = nls_tot[nidx,:]
+
+                # Bin
+                bin_cov[:,pidx1,pidx2], _, _ = binned_statistic(ells, nell,
+                                                             statistic='mean',
+                                                             bins=bins_ext)
+
+        # Invert
+        for bidx in xrange(bins.size):
+            bin_invcov[bidx,:,:] = inv(bin_cov[bidx,:,:])
+
+        # Expand binned inverse cov and cov to full size again
+        invcov = np.ones((ells.size, 3, 3))
+        invcov *= np.nan
+        cov = invcov.copy()
+        invcov[:] = bin_invcov[indices,:]
+        cov[:] = bin_cov[indices,:]
+
+        self.invcov = invcov
+        self.cov = cov
+        self.bin_cov = bin_cov
+        self.bin_invcov = bin_invcov
+        self.nls = nls_tot
+
+        return
+
+    # load_invcov function? Saves dict w/ all invcov stuff with tag..
+    # if it finds correct file loads, otherwise recomputes and saves
+    # nice thing is that you can save pickle files with cov and fisher
+    # results with same tag.
+    # or both in same file, that's even nicer because no ambiguity.
+    # so load invov gives you fisher dict, then naive_fisher just populates
+    # the fisher attribute.
+
     def naive_fisher(self, lmin, lmax, out_dir, nls_tot, bispec,
                      bins, num_pass, pol_trpl,
                      prim_template='local',
@@ -2411,6 +2354,7 @@ class Fisher(Template, PreCalc):
 
         '''
 
+        # use fisher dict to get b_mask, add 1e12 to all bad values
         # paste function from get_fisher_new.py
 
     def interp_fisher(self):
