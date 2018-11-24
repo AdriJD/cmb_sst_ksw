@@ -43,7 +43,7 @@ def run(prim_template='equilateral', out_dir=None, camb_dir=None, lmin=2, lmax=5
     F = Fisher(out_dir)
 
     F.get_camb_output(**camb_opts)
-    F.get_bins(lmin=lmin, lmax=lmax, load=True,
+    F.get_bins(lmin=lmin, lmax=lmax, load=False,
                 parity='odd', verbose=True)
 
     radii = F.get_updated_radii()
@@ -51,7 +51,7 @@ def run(prim_template='equilateral', out_dir=None, camb_dir=None, lmin=2, lmax=5
 
 #    pr.enable()
     F.get_beta(func=prim_template, radii=radii, verbose=True, optimize=True,
-               bin=False, interp_factor=None, load=True)
+               interp_factor=None, load=False, sparse=True)
     print(F.depo['scalar']['ells_camb'])
 #    pr.disable()
 #    ps = pstats.Stats(pr, stream=sys.stdout)
@@ -71,5 +71,5 @@ if __name__ == '__main__':
     # camb_dir = opj(base_dir, '20180911_sst/camb_output/lensed_r0_4000')
     camb_dir = opj(base_dir, '20171217_sst/camb_output/high_acy/sparse_5000')
 
-    run(out_dir=out_dir, camb_dir=camb_dir, lmax=5000)
+    run(out_dir=out_dir, camb_dir=camb_dir, lmax=500)
 

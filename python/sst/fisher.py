@@ -15,7 +15,7 @@ from mpi4py import MPI
 from scipy.special import spherical_jn
 from scipy.integrate import trapz
 from scipy.linalg import inv
-from scipy.stats import binned_statistic
+from tools import binned_statistic
 from scipy.interpolate import CubicSpline
 from scipy.signal import convolve
 
@@ -419,9 +419,7 @@ class PreCalc(instr.MPIBase):
             Left (lower) side of bins used in rest of code
         num_pass : array-like
             number of tuples per 3d bin that pass triangle
-            condition.
-            SIGMAi1i2i3 in bucher 2015.
-            Shape : (nbins, nbins, nbins).
+            condition. Shape : (nbins, nbins, nbins).
         first_pass : array-like
             Lowest sum tuple per 3d bin that passes triangle
             condition. Shape : (nbins, nbins, nbins, 3).
@@ -789,17 +787,17 @@ class PreCalc(instr.MPIBase):
         self.bispec['wig_s'] = wig_s
         self.bispec['wig_t'] = wig_t
 
-    def init_beta(self, func=None, L_range=[-2, -1, 0, 1, 2], radii=None, bin=True,
+    def init_beta(self, func=None, L_range=[-2, -1, 0, 1, 2], radii=None,
              optimize=True, interp_factor=None, sparse=True, verbose=False):
         '''
-        Calculate beta_l,L(r) = 2/pi * \int k^2 dk f(k) j_L(kr) T_X,l^(Z)(k).
-        Vectorized. MPI'd by radius.
+        Calculate beta_l,L(r) = 2/pi * \int k^2 dk f(k) j_L(kr) T_X,l^(Z)(k)
+        for provided functions of k.
 
         Keyword Arguments
         -----------------
         func : array-like, str
             Factor f(k) of (primordial) factorized shape function.
-            Can be of shape (nfact, 3, k.size). If string, choose
+            Can be of shape (n, k.size). If string, choose
             "local", "equilateral", "orthogonal". If None, uses local
             (default : None)
         radii : array-like
@@ -809,8 +807,6 @@ class PreCalc(instr.MPIBase):
             Possible deviations from ell, e.g. [-2, -1, 0, 1, 2].
             Must be monotonically increasing with steps of 1.
             (default : [0])
-        bin : bool
-            Bin the resulting beta in ell. (default : True)
         optimize : bool
             Do no calculate spherical bessel for kr << L (default :
             True)
@@ -819,27 +815,55 @@ class PreCalc(instr.MPIBase):
             calculated by cubic interpolation.
         sparse : bool
             Calculate beta over multipoles given by bins, then
-            interpolate. (default : True)
+            interpolate of full mulitpole range. (default : True)
         verbose : bool
             Print progress (default : False)
-        '''
+        
+        Notes
+        -----
+        If sparse = False, beta is produced over same multipole range
+        as transfer funtions.
 
-        # NOTE: sparse=True with hihg camb ells must use ells from bins to interpolate
+        Populates following keys in internal beta dictionary.
+
+        beta_s : array-like
+            Scalar beta. Shape = (ell, L, n, {I, E}, radii)
+        beta_t : array-like
+            Tensor beta. Shape = (ell, L, n, {I, E, B}, radii)
+        b_beta_s, b_beta_t : array-like
+            Binned (mean per multipole bin) versions of beta_s, beta_t.
+        ells : array-like
+            Multipole values used. 
+        L_range : array-like
+            Second multipole values used.
+        bins : array-like
+            Left (lower) side of bins used for binned betas.
+        radii : array-like
+            Comoving radii used.
+        func : array-like
+            Function(s) of k used. Shape = (n, k)
+        init_beta : bool
+            Whether or not this function has been run.
+        '''
 
         if not self.bins['init_bins']:
             raise ValueError('bins not initialized')
 
-        ells = self.depo['scalar']['ells_camb']
+        ells_transfer = self.depo['scalar']['ells_camb']
 
         if sparse:
             # Use bins as ells.
             # Mapping from bin to lidx to access transfer correctly.
             bins = self.bins['bins']
             # This assumes bins[-1] <= ells[-1] which should always be true.
-            # Use idxmap[bidx] = lidx
-            idxmap = np.digitize(bins, bins=ells, right=True)
-            ells_full = ells
+            # Use lidx = idxmap[bidx].
+            idxmap = np.digitize(bins, bins=ells_transfer, right=True)
             ells = bins
+            ells_out = self.bins['ells']
+        else:
+            # Calculate beta over all multipoles in transfer function arrays.
+            ells = ells_transfer
+            ells_out = ells_transfer
 
         L_range = np.asarray(L_range)
         if np.any(~(L_range == np.unique(L_range))):
@@ -881,24 +905,21 @@ class PreCalc(instr.MPIBase):
         self.beta['template'] = fname
         self.beta['func'] = func
 
-        # You want to allow f to be of shape (nfact, ks, k.size). ks are number
+        # You want to allow f to be of shape (n, k.size). n are number
         # of k arrays, i.e. 2 for local, 4 for equilateral.
         ndim = func.ndim
-        if ndim == 3:
-            func = func.copy()
-        elif ndim == 1:
-            func = func.copy()[np.newaxis, np.newaxis,:]
-        elif ndim == 2:
+        if ndim == 1:
             func = func.copy()[np.newaxis,:]
+        elif ndim == 2:
+            func = func.copy()
         else:
             raise ValueError('dimension {} of func not supported'.format(ndim))
 
-        if k.size != func.shape[2]:
+        if k.size != func.shape[1]:
             raise ValueError('func and k not compatible: {}, {}'.format(
                     func.shape, k.shape))
 
-        nfact = func.shape[0]
-        ks = func.shape[1]
+        ks = func.shape[0] # i.e. n
 
         if radii is None:
             radii = self.get_updated_radii()
@@ -927,9 +948,9 @@ class PreCalc(instr.MPIBase):
             radii_per_rank.append(radii[rank::self.mpi_size])
 
         # beta scalar and tensor
-        beta_s = np.zeros((ells.size,L_range.size,nfact,ks,
+        beta_s = np.zeros((ells.size,L_range.size,ks,
                            len(pols_s), radii_sub.size))
-        beta_t = np.zeros((ells.size,L_range.size,nfact,ks,
+        beta_t = np.zeros((ells.size,L_range.size,ks,
                            len(pols_t), radii_sub.size))
 
         # allocate space for bessel functions
@@ -957,8 +978,6 @@ class PreCalc(instr.MPIBase):
                 print('rank: {}, ridx: {}/{}, radius: {} Mpc'.format(
                     self.mpi_rank, ridx, radii_sub.size - 1, radius))
 
-            ells_full_size = ells_full.size
-            ells_size = ells.size
             ell_prev = ells[0] - 1
             for lidx_b, ell in enumerate(ells):
 
@@ -969,7 +988,7 @@ class PreCalc(instr.MPIBase):
 
                 if self.mpi_rank == 0 and verbose:
                     sys.stdout.write('\r'+'lidx: {}/{}, ell: {}'.format(
-                        lidx_b, ells_size-1, ell))
+                        lidx_b, ells.size-1, ell))
                 for Lidx, L in enumerate(L_range):
                     L = ell + L
                     if L < 0:
@@ -1043,21 +1062,20 @@ class PreCalc(instr.MPIBase):
                             tmp_t[kmin_idx:] = transfer_t[pidx,lidx,kmin_idx:]
                         tmp_t[kmin_idx:] *= jL[Lidx,kmin_idx:]
 
-                        for nidx in xrange(nfact):
-                            for kidx in xrange(ks):
+                        for kidx in xrange(ks):
 
-                                if pol != 'B':
-                                    # scalars
-                                    integrand_s = tmp_s[kmin_idx:] * \
-                                        func[nidx,kidx,kmin_idx:]
-                                    b_int_s = trapz(integrand_s, k[kmin_idx:])
-                                    beta_s[lidx_b,Lidx,nidx,kidx,pidx,ridx] = b_int_s
+                            if pol != 'B':
+                                # scalars
+                                integrand_s = tmp_s[kmin_idx:] * \
+                                    func[kidx,kmin_idx:]
+                                b_int_s = trapz(integrand_s, k[kmin_idx:])
+                                beta_s[lidx_b,Lidx,kidx,pidx,ridx] = b_int_s
 
-                                # tensors
-                                integrand_t = tmp_t[kmin_idx:] * \
-                                    func[nidx,kidx,kmin_idx:]
-                                b_int_t = trapz(integrand_t, k[kmin_idx:])
-                                beta_t[lidx_b,Lidx,nidx,kidx,pidx,ridx] = b_int_t
+                            # tensors
+                            integrand_t = tmp_t[kmin_idx:] * \
+                                func[kidx,kmin_idx:]
+                            b_int_t = trapz(integrand_t, k[kmin_idx:])
+                            beta_t[lidx_b,Lidx,kidx,pidx,ridx] = b_int_t
 
                 # Permute rows such that oldest row can be replaced next ell
                 # no harm doing this even when ells are sparse, see above.
@@ -1082,9 +1100,9 @@ class PreCalc(instr.MPIBase):
             if self.mpi_rank == 0 and verbose:
                 print('Interpolating beta over multipoles')
             # Spline betas to full size in ell again.
-            beta_s_full = np.zeros((ells_full.size, L_range.size, nfact,
+            beta_s_full = np.zeros((ells_out.size, L_range.size,
                                     ks, len(pols_s), radii_sub.size))
-            beta_t_full = np.zeros((ells_full.size, L_range.size, nfact,
+            beta_t_full = np.zeros((ells_out.size, L_range.size,
                                     ks, len(pols_t), radii_sub.size))
 
             for ridx, _ in enumerate(radii_sub):
@@ -1095,23 +1113,22 @@ class PreCalc(instr.MPIBase):
 
                 for Lidx, _ in enumerate(L_range):
                     for pidx, pol in enumerate(pols_t):
-                        for nidx in xrange(nfact):
-                            for kidx in xrange(ks):
+                        for kidx in xrange(ks):
 
-                                # Tensor.
-                                cs = CubicSpline(ells,
-                                     beta_t[:,Lidx,nidx,kidx,pidx,ridx])
-                                beta_t_full[:,Lidx,nidx,kidx,pidx,ridx] \
-                                    = cs(ells_full)
+                            # Tensor.
+                            cs = CubicSpline(ells,
+                                 beta_t[:,Lidx,kidx,pidx,ridx])
+                            beta_t_full[:,Lidx,kidx,pidx,ridx] \
+                                = cs(ells_out)
 
-                                if pol == 'B':
-                                    continue
+                            if pol == 'B':
+                                continue
 
-                                # Scalar.
-                                cs = CubicSpline(ells,
-                                     beta_s[:,Lidx,nidx,kidx,pidx,ridx])
-                                beta_s_full[:,Lidx,nidx,kidx,pidx,ridx] \
-                                    = cs(ells_full)
+                            # Scalar.
+                            cs = CubicSpline(ells,
+                                 beta_s[:,Lidx,kidx,pidx,ridx])
+                            beta_s_full[:,Lidx,kidx,pidx,ridx] \
+                                = cs(ells_out)
 
             if self.mpi_rank == 0 and verbose:
                 print('')
@@ -1119,7 +1136,6 @@ class PreCalc(instr.MPIBase):
 
             beta_s = beta_s_full
             beta_t = beta_t_full
-            ells = ells_full
 
         # Combine all sub range betas on root if mpi.
         if self.mpi:
@@ -1131,17 +1147,17 @@ class PreCalc(instr.MPIBase):
             # create full size beta on root
             if self.mpi_rank == 0:
 
-                beta_s_full = np.zeros((ells.size, L_range.size, nfact,
+                beta_s_full = np.zeros((ells_out.size, L_range.size,
                                         ks, len(pols_s), radii.size))
-                beta_t_full = np.zeros((ells.size, L_range.size, nfact,
+                beta_t_full = np.zeros((ells_out.size, L_range.size,
                                         ks, len(pols_t), radii.size))
 
                 # Already place root beta sub into beta_full.
                 for ridx, radius in enumerate(radii_per_rank[0]):
                     # Find radius index in total radii.
                     ridx_tot, = np.where(radii == radius)[0]
-                    beta_s_full[:,:,:,:,:,ridx_tot] = beta_s[:,:,:,:,:,ridx]
-                    beta_t_full[:,:,:,:,:,ridx_tot] = beta_t[:,:,:,:,:,ridx]
+                    beta_s_full[:,:,:,:,ridx_tot] = beta_s[:,:,:,:,ridx]
+                    beta_t_full[:,:,:,:,ridx_tot] = beta_t[:,:,:,:,ridx]
 
             else:
                 beta_s_full = None
@@ -1154,9 +1170,9 @@ class PreCalc(instr.MPIBase):
                 if self.mpi_rank == 0:
                     r_size = radii_per_rank[rank].size
 
-                    beta_s_sub = np.ones((ells.size,L_range.size,nfact,
+                    beta_s_sub = np.ones((ells_out.size,L_range.size,
                                           ks,len(pols_s),r_size))
-                    beta_t_sub = np.ones((ells.size,L_range.size,nfact,
+                    beta_t_sub = np.ones((ells_out.size,L_range.size,
                                           ks,len(pols_t),r_size))
 
                 # send beta_sub to root
@@ -1182,23 +1198,16 @@ class PreCalc(instr.MPIBase):
                         # find radius index in total radii
                         ridx_tot, = np.where(radii == radius)[0]
 
-                        beta_s_full[:,:,:,:,:,ridx_tot] = \
-                            beta_s_sub[:,:,:,:,:,ridx]
-                        beta_t_full[:,:,:,:,:,ridx_tot] = \
-                            beta_t_sub[:,:,:,:,:,ridx]
+                        beta_s_full[:,:,:,:,ridx_tot] = \
+                            beta_s_sub[:,:,:,:,ridx]
+                        beta_t_full[:,:,:,:,ridx_tot] = \
+                            beta_t_sub[:,:,:,:,ridx]
 
             # broadcast full beta array to all ranks
             beta_s = self.broadcast_array(beta_s_full)
             beta_t = self.broadcast_array(beta_t_full)
 
-        if not bin:
-            self.beta['beta_s'] = beta_s
-            self.beta['beta_t'] = beta_t
-            self.beta['init_beta'] = True
-
-            return
-
-        # Bin beta
+        # Bin beta (i.e. mean per bin).
         if self.mpi_rank == 0 and verbose:
             print('Binning beta')
 
@@ -1207,9 +1216,9 @@ class PreCalc(instr.MPIBase):
         beta_s_f = np.asfortranarray(beta_s)
         beta_t_f = np.asfortranarray(beta_t)
 
-        b_beta_s_f = np.zeros((bins.size,L_range.size,nfact,
+        b_beta_s_f = np.zeros((bins.size,L_range.size,
                                ks,len(pols_s),radii.size))
-        b_beta_t_f = np.zeros((bins.size,L_range.size,nfact,
+        b_beta_t_f = np.zeros((bins.size,L_range.size,
                                ks,len(pols_t),radii.size))
 
         b_beta_s_f = np.asfortranarray(b_beta_s_f)
@@ -1224,23 +1233,22 @@ class PreCalc(instr.MPIBase):
         for pidx, pol in enumerate(pols_t):
             for kidx in xrange(ks):
                 for ridx, radius in enumerate(radii):
-                    for nidx in xrange(nfact):
-                        for Lidx, L in enumerate(L_range):
+                    for Lidx, L in enumerate(L_range):
 
-                            if pol != 'B':
-                                # scalar
-                                tmp_beta = beta_s_f[:,Lidx,nidx,kidx,pidx,ridx]
+                        if pol != 'B':
+                            # scalar
+                            tmp_beta = beta_s_f[:,Lidx,kidx,pidx,ridx]
 
-                                b_beta_s_f[:,Lidx,nidx,kidx,pidx,ridx], _, _ = \
-                                    binned_statistic(ells, tmp_beta, statistic='mean',
-                                                     bins=bins_ext)
-
-                            # tensor
-                            tmp_beta = beta_t_f[:,Lidx,nidx,kidx,pidx,ridx]
-
-                            b_beta_t_f[:,Lidx,nidx,kidx,pidx,ridx], _, _ = \
-                                binned_statistic(ells, tmp_beta, statistic='mean',
+                            b_beta_s_f[:,Lidx,kidx,pidx,ridx], _, _ = \
+                                binned_statistic(ells_out, tmp_beta, statistic='mean',
                                                  bins=bins_ext)
+
+                        # tensor
+                        tmp_beta = beta_t_f[:,Lidx,kidx,pidx,ridx]
+
+                        b_beta_t_f[:,Lidx,kidx,pidx,ridx], _, _ = \
+                            binned_statistic(ells_out, tmp_beta, statistic='mean',
+                                             bins=bins_ext)
 
         # check for nans
         if np.any(np.isnan(beta_s)):
@@ -1254,21 +1262,23 @@ class PreCalc(instr.MPIBase):
         b_beta_s = np.ascontiguousarray(b_beta_s_f)
         b_beta_t = np.ascontiguousarray(b_beta_t_f)
 
-        # So now these are the unbinned versions
-        # Note that they might be using a sparse high ell.
+        # Unbinned versions.
         self.beta['beta_s'] = beta_s
         self.beta['beta_t'] = beta_t
 
-        # binned versions
+        # Binned versions.
         self.beta['b_beta_s'] = b_beta_s
         self.beta['b_beta_t'] = b_beta_t
         self.beta['init_beta'] = True
+
+        self.beta['ells'] = ells_out
+        self.beta['bins'] = bins
 
         return
 
 class Template(object):
     '''
-    Create arrays of shape (nfact, 3, k.size)
+    Create n k-functions in arrays of shape (n, k.size)
     '''
 
     def __init__(self, **kwargs):

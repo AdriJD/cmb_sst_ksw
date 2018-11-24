@@ -24,12 +24,12 @@ def plot_alpha_beta(beta_dir, img_dir):
     if not os.path.exists(img_dir):
         os.makedirs(img_dir)
 
-    beta_s = np.load(opj(beta_dir, 'beta_s.npy'))
-    beta_t = np.load(opj(beta_dir, 'beta_t.npy'))
-    radii = np.load(opj(beta_dir, 'radii.npy'))
+    beta = np.load(opj(beta_dir, 'beta.pkl'))
+    beta_s = beta['beta_s']
+    beta_t = beta['beta_t']
+    radii = beta['radii']
 
     lidx = 18
-    nfact = 0
 
     ridx = radii.size - 1
     lmax = beta_s.shape[0] + 1
@@ -66,11 +66,11 @@ def plot_alpha_beta(beta_dir, img_dir):
             plot_opts = dict(ls=ls, alpha=alpha)
 
             if pidx != 2:
-                axs[0].plot(radii, beta_s[lidx,Lidx,nfact,0,pidx,:], 
+                axs[0].plot(radii, beta_s[lidx,Lidx,0,pidx,:], 
                             label=r'$\ell={'+str(lidx+2)+'}, L='+str(L)+'$',
                             color='C0',
                             **plot_opts)
-            axs[1].plot(radii, beta_t[lidx,Lidx,nfact,0,pidx,:], 
+            axs[1].plot(radii, beta_t[lidx,Lidx,0,pidx,:], 
                         color='C1', **plot_opts)
         axs[0].set_xlabel(r'Comoving radius $r$ [$\mathrm{Mpc}$]')
         axs[1].set_xlabel(r'Comoving radius $r$ [$\mathrm{Mpc}$]')
@@ -100,7 +100,7 @@ def plot_alpha_beta(beta_dir, img_dir):
                 label = r'$ \ \ \: '+'{0:d}'.format(eLL)+'$'
             else:
                 label = r'$'+'{0:+d}'.format(eLL)+'$'
-            axs[pidx,0].plot(radii, radii ** (2) * beta_s[lidx,eLL+2,nfact,1,pidx,:],
+            axs[pidx,0].plot(radii, radii ** (2) * beta_s[lidx,eLL+2,1,pidx,:],
                              label=label, 
                              color='C0', **plot_opts)
 #        axs[pidx,0].set_ylabel(r'$r^{2} \alpha_{'+pol+',\ell, L}(r)$')
@@ -152,7 +152,7 @@ def plot_alpha_beta(beta_dir, img_dir):
 
             plot_opts = dict(ls=ls, alpha=alpha)
 
-            axs[pidx,0].plot(radii, radii ** (2) * beta_t[lidx,eLL+2,nfact,1,pidx,:], 
+            axs[pidx,0].plot(radii, radii ** (2) * beta_t[lidx,eLL+2,1,pidx,:], 
                              color='C1', label=r'$'+'{0:+d}'.format(eLL)+'$', **plot_opts)
 
         axs[pidx,0].set_ylabel(r'$r^{2} \alpha_{'+pol+',\ell, L}(r)$')
@@ -182,9 +182,9 @@ def plot_alpha_beta(beta_dir, img_dir):
         for Lidx in [2]:
             for ii, ridx in enumerate(ridxs):
                 if pidx != 2:
-                    axs[0].plot(ell, dell * beta_s[:,Lidx,nfact,0,pidx,ridx],
+                    axs[0].plot(ell, dell * beta_s[:,Lidx,0,pidx,ridx],
                                 color=str(grays[ii]))
-                axs[1].plot(ell, dell * beta_t[:,Lidx,nfact,0,pidx,ridx],
+                axs[1].plot(ell, dell * beta_t[:,Lidx,0,pidx,ridx],
                             color=str(grays[ii]))
         axs[0].set_xlabel(r'Multipole [$\ell$]')
         axs[1].set_xlabel(r'Multipole [$\ell$]')
@@ -199,9 +199,9 @@ def plot_alpha_beta(beta_dir, img_dir):
         for Lidx in [2]:
             for ii, ridx in enumerate(ridxs):
                 if pidx != 2:                        
-                    axs[0].plot(ell, dell * beta_s[:,Lidx,nfact,1,pidx,ridx],
+                    axs[0].plot(ell, dell * beta_s[:,Lidx,1,pidx,ridx],
                                 color=str(grays[ii]))
-                axs[1].plot(ell, dell * beta_t[:,Lidx,nfact,1,pidx,ridx],
+                axs[1].plot(ell, dell * beta_t[:,Lidx,1,pidx,ridx],
                             color=str(grays[ii]))
         axs[0].set_xlabel(r'Multipole [$\ell$]')
         axs[1].set_xlabel(r'Multipole [$\ell$]')
@@ -217,13 +217,13 @@ def plot_alpha_beta_matrix(base_dir, img_dir):
     Plot alpha, beta as ell x r matrices
     '''
 
-    beta_s = np.load(opj(beta_dir, 'beta_s.npy'))
-    beta_t = np.load(opj(beta_dir, 'beta_t.npy'))
-    radii = np.load(opj(beta_dir, 'radii.npy'))
+    beta = np.load(opj(beta_dir, 'beta.pkl'))
+    beta_s = beta['beta_s']
+    beta_t = beta['beta_t']
+    radii = beta['radii']
     
     Lidx = 2
     lmax = beta_s.shape[0] + 1
-    nfact = 0
 
     ell = np.arange(2, lmax+1)
     dell = ell * (ell + 1) / 2. / np.pi
@@ -244,16 +244,16 @@ def plot_alpha_beta_matrix(base_dir, img_dir):
     for pidx in [0, 1, 2]:
         fig, axs = plt.subplots(ncols=2, sharey=False, figsize=(8, 4))
         if pidx != 2:                        
-            axs[0].imshow(beta_s[:,Lidx,nfact,0,pidx,:].T, **imshow_opts)
-        axs[1].imshow(beta_t[:,Lidx,nfact,0,pidx,:].T, **imshow_opts)
+            axs[0].imshow(beta_s[:,Lidx,0,pidx,:].T, **imshow_opts)
+        axs[1].imshow(beta_t[:,Lidx,0,pidx,:].T, **imshow_opts)
         fig.tight_layout()
         fig.savefig(opj(img_dir, 'beta_matrix_pidx{}.png'.format(pidx)), dpi=200)
         plt.close(fig)
 
         fig, axs = plt.subplots(ncols=2, sharey=False, figsize=(8, 4))
         if pidx != 2:                        
-            axs[0].imshow(beta_s[:,Lidx,nfact,1,pidx,:].T, **imshow_opts)
-        axs[1].imshow(beta_t[:,Lidx,nfact,1,pidx,:].T, **imshow_opts)
+            axs[0].imshow(beta_s[:,Lidx,1,pidx,:].T, **imshow_opts)
+        axs[1].imshow(beta_t[:,Lidx,1,pidx,:].T, **imshow_opts)
         fig.tight_layout()
         fig.savefig(opj(img_dir, 'alpha_matrix_pidx{}.png'.format(pidx)), dpi=200)
         plt.close(fig)
@@ -263,8 +263,9 @@ if __name__ == '__main__':
     base_dir = '/mn/stornext/d8/ITA/spider/adri/analysis/'
 
 #    beta_dir = opj(base_dir, '20180911_sst/beta/equilateral')
-    beta_dir = opj(base_dir, '20180911_sst/beta_sparse_ell/equilateral')
-    img_dir = opj(base_dir, '20180911_sst/beta/img/')
+#    beta_dir = opj(base_dir, '20180911_sst/beta_sparse_ell/equilateral')
+    beta_dir = opj(base_dir, '20181123_sst/precomputed')
+    img_dir = opj(base_dir, '20181123_sst/img/beta/')
 
     plot_alpha_beta(beta_dir, img_dir)
     # plot_alpha_beta_matrix(beta_dir, img_dir)

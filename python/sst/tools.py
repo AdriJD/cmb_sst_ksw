@@ -2,6 +2,10 @@
 Collection of tools used for fisher analysis
 '''
 
+import numpy as np
+import warnings
+import scipy.stats as ss
+
 def combine(self, a, b, c):
     '''
     Combine three int arrays into a single int array
@@ -56,3 +60,10 @@ def unpack(self, comb):
 
     return a, b, c
 
+def binned_statistic(*args, **kwargs):
+    ''' scipy.stats.binned_statistics without FutureWarnings'''
+
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore",category=FutureWarning)
+        ret = ss.binned_statistic(*args, **kwargs)
+    return ret
