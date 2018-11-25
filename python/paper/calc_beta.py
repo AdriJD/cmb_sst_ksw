@@ -45,9 +45,9 @@ def run(prim_template='equilateral', out_dir=None, camb_dir=None, lmin=2, lmax=5
     F.get_camb_output(**camb_opts)
     F.get_bins(lmin=lmin, lmax=lmax, load=False,
                 parity='odd', verbose=True)
-
+    exit()
     radii = F.get_updated_radii()
-    radii = radii[::5]
+    radii = radii[::30]
 
 #    pr.enable()
     F.get_beta(func=prim_template, radii=radii, verbose=True, optimize=True,
@@ -71,5 +71,5 @@ if __name__ == '__main__':
     # camb_dir = opj(base_dir, '20180911_sst/camb_output/lensed_r0_4000')
     camb_dir = opj(base_dir, '20171217_sst/camb_output/high_acy/sparse_5000')
 
-    run(out_dir=out_dir, camb_dir=camb_dir, lmax=500)
+    run(out_dir=out_dir, camb_dir=camb_dir, lmax=5000)
 

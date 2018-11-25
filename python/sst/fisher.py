@@ -384,6 +384,7 @@ class PreCalc(instr.MPIBase):
             idxs_on_rank = self.bins['idxs_on_rank'][str(rank)]
             return bins_on_rank, idxs_on_rank
 
+#    @profile
     def init_bins(self, lmin=None, lmax=None,
                   bins=None, parity='odd',
                   verbose=False):
@@ -497,77 +498,85 @@ class PreCalc(instr.MPIBase):
         first_pass = np.zeros((bins_on_rank.size, num_bins, num_bins, 3),
                               dtype=int)
 
-        for idx1, idx1_full in enumerate(idxs_on_rank):
-            # Note, idx1 is index to this ranks bin arrays only.
-            # idx1_full = index to full bins array.
-            bin1 = bins[idx1_full]
+        #####
+        
+        if False:
+            for idx1, idx1_full in enumerate(idxs_on_rank):
+                # Note, idx1 is index to this ranks bin arrays only.
+                # idx1_full = index to full bins array.
+                bin1 = bins[idx1_full]
 
-            if self.mpi_rank == 0 and verbose:
-                sys.stdout.write('\r'+'bidx: {}/{}'.format(
-                    idx1+1, idxs_on_rank.size))
-            try:
-                lmax1 = bins[idx1_full + 1] - 1
-            except IndexError:
-                # We are in last bin, use lmax.
-                lmax1 = lmax
-
-            for idx2, idx2_full in enumerate(idx[idx1_full:]):
-                bin2 = bins[idx2_full]
-
+                if self.mpi_rank == 0 and verbose:
+                    sys.stdout.write('\r'+'bidx: {}/{}'.format(
+                        idx1+1, idxs_on_rank.size))
                 try:
-                    lmax2 = bins[idx2_full + 1] - 1
+                    lmax1 = bins[idx1_full + 1] - 1
                 except IndexError:
                     # We are in last bin, use lmax.
-                    lmax2 = lmax
+                    lmax1 = lmax
 
-                for idx3, idx3_full in enumerate(idx[idx2_full:]):
-                    bin3 = bins[idx3_full]
+                for idx2, idx2_full in enumerate(idx[idx1_full:]):
+                    bin2 = bins[idx2_full]
 
                     try:
-                        lmax3 = bins[idx3_full + 1] - 1
+                        lmax2 = bins[idx2_full + 1] - 1
                     except IndexError:
                         # We are in last bin, use lmax.
-                        lmax3 = lmax
+                        lmax2 = lmax
 
-                    # Exclude triangle.
-                    if bin3 > (lmax1 + lmax2):
-                        break
+                    for idx3, idx3_full in enumerate(idx[idx2_full:]):
+                        bin3 = bins[idx3_full]
 
-                    for ell1 in xrange(bin1, lmax1+1):
-                        for ell2 in xrange(max(ell1, bin2), lmax2+1):
+                        try:
+                            lmax3 = bins[idx3_full + 1] - 1
+                        except IndexError:
+                            # We are in last bin, use lmax.
+                            lmax3 = lmax
 
-                            ells3 = np.arange(max(ell2, bin3), lmax3+1)
-                            ba = np.ones(ells3.size, dtype=bool)
+                        # Exclude triangle.
+                        if bin3 > (lmax1 + lmax2):
+                            break
 
-                            # Exclude parity odd/even.
-                            if parity:
-                                if (ell1 + ell2) % 2:
-                                    # Odd sum, l3 must be even if parity=odd.
-                                    ba[ells3%2 == pmod] *= False
-                                else:
-                                    # Even sum, l3 must be odd if parity=odd.
-                                    ba[~(ells3%2 == pmod)] *= False
+                        for ell1 in xrange(bin1, lmax1+1):
+                            for ell2 in xrange(max(ell1, bin2), lmax2+1):
 
-                            # exclude triangle
-                            ba[(abs(ell1 - ell2) > ells3) | (ells3 > (ell1 + ell2))] \
-                                *= False
+                                ells3 = np.arange(max(ell2, bin3), lmax3+1)
+                                ba = np.ones(ells3.size, dtype=bool)
 
-                            # Use boolean index array to determine good ell3s
-                            gd_ell3s = ells3[ba]
-                            n_pass = np.sum(ba)
+                                # Exclude parity odd/even.
+                                if parity:
+                                    if (ell1 + ell2) % 2:
+                                        # Odd sum, l3 must be even if parity=odd.
+                                        ba[ells3%2 == pmod] *= False
+                                    else:
+                                        # Even sum, l3 must be odd if parity=odd.
+                                        ba[~(ells3%2 == pmod)] *= False
 
-                            n_in_bin = num_pass[idx1,idx2_full,idx3_full]
+                                # exclude triangle
+                                ba[(abs(ell1 - ell2) > ells3) | (ells3 > (ell1 + ell2))] \
+                                    *= False
 
-                            if n_pass != 0 and n_in_bin == 0:
-                                # No good tuples in this bin yet but we
-                                # just found at least one.
-                                first_pass[idx1, idx2_full, idx3_full] \
-                                    = ell1, ell2, gd_ell3s[0]
+                                # Use boolean index array to determine good ell3s
+                                gd_ell3s = ells3[ba]
+                                n_pass = np.sum(ba)
 
-                            num_pass[idx1,idx2_full,idx3_full] += n_pass
+                                n_in_bin = num_pass[idx1,idx2_full,idx3_full]
 
-            if self.mpi_rank == 0:
-                sys.stdout.flush()
+                                if n_pass != 0 and n_in_bin == 0:
+                                    # No good tuples in this bin yet but we
+                                    # just found at least one.
+                                    first_pass[idx1, idx2_full, idx3_full] \
+                                        = ell1, ell2, gd_ell3s[0]
+
+                                num_pass[idx1,idx2_full,idx3_full] += n_pass
+
+                if self.mpi_rank == 0:
+                    sys.stdout.flush()
+
+        else:
+            if pmod is None:
+                pmod = 2
+            tools.init_bins_jit(bins, idxs_on_rank, num_pass, first_pass, pmod)
 
         # now combine num_pass and first_pass on root
         if self.mpi:
@@ -1607,7 +1616,6 @@ class Fisher(Template, PreCalc):
                 for idx3, i3 in enumerate(bins[idx2:]):
                     idx3 += idx2
 
-#                    num = num_pass[idx1, idx2, idx3]
                     num = num_pass[idxb, idx2, idx3]
                     if num == 0.:
                         # No valid ell tuples in this bin
@@ -1630,7 +1638,6 @@ class Fisher(Template, PreCalc):
                         gamma_t_l3 = beta_t[idx3,Lidx3,0,3,:,:]
 
                     # Load the ell triplets used per bin
-#                    ell1, ell2, ell3 = first_pass[idx1, idx2, idx3,:]
                     ell1, ell2, ell3 = first_pass[idxb, idx2, idx3,:]
 
                     if ell1 < 2 or ell2 < 2 or ell3 < 2:
@@ -1998,7 +2005,6 @@ class Fisher(Template, PreCalc):
         '''
 
         path = self.subdirs['precomputed']
-#        bispec_file = opj(path, 'bispec.pkl')
         bispec_file = opj(path, 'bispec_{}.pkl'.format(prim_template))
         recompute = not load
 
