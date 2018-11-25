@@ -118,28 +118,28 @@ def init_bins_jit(bins, idxs_on_rank, num_pass, first_pass, pmod):
                     # Triangle condition will always fail.
                     break
 
-                # Loop through bin.
+                # Loop through bin, again only the l1 <= l2 <= l3 part
                 n = 0
                 f1 = 0
                 f2 = 0
                 f3 = 0
                 for ell1 in xrange(bin1, bmax1+1):
-                    for ell2 in xrange(bin2, bmax2+1):
-                        for ell3 in xrange(bin3, bmax3+1):
+                    for ell2 in xrange(max(ell1, bin2), bmax2+1):
+                        for ell3 in xrange(max(ell2, bin3), bmax3+1):
 
+                            # RHS triangle ineq.
                             if ell3 > (ell1 + ell2):
-                                break
+                                # There will no valid one after this.
+                                break                            
 
+                            if ell3 < ell2 or ell3 < ell1:
+                                # This takes care of |l1 - l2| <= l3
+                                continue
+                                
                             # Parity. Pmod = 1 if parity == 0
                             if pmod != 2:
-                                if (ell1 + ell2) % 2:
-                                    # Odd sum, l3 must be even if parity=odd.
-                                    if ell3 % 2 == pmod:
-                                        break
-                                else:
-                                    # Even sum, l3 must be odd if parity=odd.
-                                    if ell3 % 2 != pmod:
-                                        break
+                                if (ell1 + ell2 + ell3) % 2 != pmod:
+                                    continue
 
                             n += 1
                             if n == 1:

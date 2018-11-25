@@ -22,13 +22,13 @@ from scipy.signal import convolve
 import camb_tools as ct
 import tools
 import pywigxjpf as wig
-from beamconv import instrument as instr
+from beamconv import MPIBase
 
 opj = os.path.join
 
 __all__ = ['PreCalc', 'Template', 'Fisher']
 
-class PreCalc(instr.MPIBase):
+class PreCalc(MPIBase):
 
     def __init__(self, **kwargs):
         '''
@@ -855,6 +855,9 @@ class PreCalc(instr.MPIBase):
             Whether or not this function has been run.
         '''
 
+        # ~80 % of time is spend on spher. bessels. You can try
+        # to do cubic interpolation
+
         if not self.bins['init_bins']:
             raise ValueError('bins not initialized')
 
@@ -1492,6 +1495,7 @@ class Fisher(Template, PreCalc):
 
         self.bispec['pol_trpl'] = pol_trpl
 
+#    @profile
     def _binned_bispectrum(self, DL1, DL2, DL3, prim_template='local'):
         '''
         Return binned bispectrum for given \Delta L triplet.
@@ -1583,35 +1587,35 @@ class Fisher(Template, PreCalc):
             # note, idxb is bins_on_rank index for bispectrum per rank
             # idx1 is index to full-sized bin array, i1 is bin
             # load binned beta
-            beta_s_l1 = beta_s[idx1,Lidx1,0,0,:,:] # (2,r.size)
-            beta_t_l1 = beta_t[idx1,Lidx1,0,0,:,:] # (3,r.size)
+            beta_s_l1 = beta_s[idx1,Lidx1,0,:,:] # (2,r.size)
+            beta_t_l1 = beta_t[idx1,Lidx1,0,:,:] # (3,r.size)
 
-            alpha_s_l1 = beta_s[idx1,Lidx1,0,1,:,:] # (2,r.size)
-            alpha_t_l1 = beta_t[idx1,Lidx1,0,1,:,:] # (3,r.size)
+            alpha_s_l1 = beta_s[idx1,Lidx1,1,:,:] # (2,r.size)
+            alpha_t_l1 = beta_t[idx1,Lidx1,1,:,:] # (3,r.size)
 
             if prim_template != 'local':
-                delta_s_l1 = beta_s[idx1,Lidx1,0,2,:,:]
-                delta_t_l1 = beta_t[idx1,Lidx1,0,2,:,:]
+                delta_s_l1 = beta_s[idx1,Lidx1,2,:,:]
+                delta_t_l1 = beta_t[idx1,Lidx1,2,:,:]
 
-                gamma_s_l1 = beta_s[idx1,Lidx1,0,3,:,:]
-                gamma_t_l1 = beta_t[idx1,Lidx1,0,3,:,:]
+                gamma_s_l1 = beta_s[idx1,Lidx1,3,:,:]
+                gamma_t_l1 = beta_t[idx1,Lidx1,3,:,:]
 
             for idx2, i2 in enumerate(bins[idx1:]):
                 idx2 += idx1
 
                 # load binned beta
-                beta_s_l2 = beta_s[idx2,Lidx2,0,0,:,:] # (2,r.size)
-                beta_t_l2 = beta_t[idx2,Lidx2,0,0,:,:] # (3,r.size)
+                beta_s_l2 = beta_s[idx2,Lidx2,0,:,:] # (2,r.size)
+                beta_t_l2 = beta_t[idx2,Lidx2,0,:,:] # (3,r.size)
 
-                alpha_s_l2 = beta_s[idx2,Lidx2,0,1,:,:] # (2,r.size)
-                alpha_t_l2 = beta_t[idx2,Lidx2,0,1,:,:] # (3,r.size)
+                alpha_s_l2 = beta_s[idx2,Lidx2,1,:,:] # (2,r.size)
+                alpha_t_l2 = beta_t[idx2,Lidx2,1,:,:] # (3,r.size)
 
                 if prim_template != 'local':
-                    delta_s_l2 = beta_s[idx2,Lidx2,0,2,:,:]
-                    delta_t_l2 = beta_t[idx2,Lidx2,0,2,:,:]
+                    delta_s_l2 = beta_s[idx2,Lidx2,2,:,:]
+                    delta_t_l2 = beta_t[idx2,Lidx2,2,:,:]
 
-                    gamma_s_l2 = beta_s[idx2,Lidx2,0,3,:,:]
-                    gamma_t_l2 = beta_t[idx2,Lidx2,0,3,:,:]
+                    gamma_s_l2 = beta_s[idx2,Lidx2,3,:,:]
+                    gamma_t_l2 = beta_t[idx2,Lidx2,3,:,:]
 
                 for idx3, i3 in enumerate(bins[idx2:]):
                     idx3 += idx2
@@ -1624,18 +1628,18 @@ class Fisher(Template, PreCalc):
                         continue
 
                     # load binned beta
-                    beta_s_l3 = beta_s[idx3,Lidx3,0,0,:,:] # (2,r.size)
-                    beta_t_l3 = beta_t[idx3,Lidx3,0,0,:,:] # (3,r.size)
+                    beta_s_l3 = beta_s[idx3,Lidx3,0,:,:] # (2,r.size)
+                    beta_t_l3 = beta_t[idx3,Lidx3,0,:,:] # (3,r.size)
 
-                    alpha_s_l3 = beta_s[idx3,Lidx3,0,1,:,:] # (2,r.size)
-                    alpha_t_l3 = beta_t[idx3,Lidx3,0,1,:,:] # (3,r.size)
+                    alpha_s_l3 = beta_s[idx3,Lidx3,1,:,:] # (2,r.size)
+                    alpha_t_l3 = beta_t[idx3,Lidx3,1,:,:] # (3,r.size)
 
                     if prim_template != 'local':
-                        delta_s_l3 = beta_s[idx3,Lidx3,0,2,:,:]
-                        delta_t_l3 = beta_t[idx3,Lidx3,0,2,:,:]
+                        delta_s_l3 = beta_s[idx3,Lidx3,2,:,:]
+                        delta_t_l3 = beta_t[idx3,Lidx3,2,:,:]
 
-                        gamma_s_l3 = beta_s[idx3,Lidx3,0,3,:,:]
-                        gamma_t_l3 = beta_t[idx3,Lidx3,0,3,:,:]
+                        gamma_s_l3 = beta_s[idx3,Lidx3,3,:,:]
+                        gamma_t_l3 = beta_t[idx3,Lidx3,3,:,:]
 
                     # Load the ell triplets used per bin
                     ell1, ell2, ell3 = first_pass[idxb, idx2, idx3,:]
