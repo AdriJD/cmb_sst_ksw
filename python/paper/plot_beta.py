@@ -19,17 +19,29 @@ class ScalarFormatterForceFormat(ScalarFormatter):
     def _set_format(self):
         self.format = '%1d'
 
-def plot_alpha_beta(beta_dir, img_dir):
+def plot_alpha_beta(beta_dir, img_dir, beta_tag=None):
+    '''
+    Keyword arguments
+    -----------------
+    beta_tag : str, None
+        If str, look for beta_<beta_tag>.pkl files.
+    '''
+
 
     if not os.path.exists(img_dir):
         os.makedirs(img_dir)
 
-    beta = np.load(opj(beta_dir, 'beta.pkl'))
+    if beta_tag is None:
+        beta_file = 'beta.pkl'
+    else:
+        beta_file = 'beta_{}.pkl'.format(beta_tag)
+
+    beta = np.load(opj(beta_dir, beta_file))
     beta_s = beta['beta_s']
     beta_t = beta['beta_t']
     radii = beta['radii']
 
-    lidx = 18
+    lidx = 2
 
     ridx = radii.size - 1
     lmax = beta_s.shape[0] + 1
@@ -121,19 +133,6 @@ def plot_alpha_beta(beta_dir, img_dir):
         ax.tick_params(axis='both', direction='in', top=True, right=True)
         ax.ticklabel_format(axis='y', style='sci', scilimits=(2,2),
                              useMathText=True)
-        #yfmt = ScalarFormatterForceFormat()
-        #yfmt.set_powerlimits((0,0))
-        #ax.yaxis.set_major_formatter(yfmt)
-        #locator = MaxNLocator(integer=True)
-        #ax.yaxis.set_major_locator(locator)
-
-#    formatter = ScalarFormatter(useMathText=True)
-#    formatter.set_scientific(True) 
-#    formatter.set_powerlimits((-2,2))
-
-#    f = ScalarFormatter(useOffset=False, useMathText=True)
-#    g = lambda x,pos : "${}$".format(f._formatSciNotation('%1.10e' % x))
-#    axs[0,0].yaxis.set_major_formatter(FuncFormatter(g))
 
     #fig.subplots_adjust(right=0.8)
     fig.savefig(opj(img_dir, 'alpha_scal.pdf'), dpi=300, bbox_inches='tight')
@@ -172,8 +171,6 @@ def plot_alpha_beta(beta_dir, img_dir):
         
     fig.savefig(opj(img_dir, 'alpha_tens.pdf'), dpi=300) #bbox_inches='tight')
     plt.close(fig)
-
-
 
 
     # Alpha and beta as function of multipole.
@@ -258,6 +255,144 @@ def plot_alpha_beta_matrix(base_dir, img_dir):
         fig.savefig(opj(img_dir, 'alpha_matrix_pidx{}.png'.format(pidx)), dpi=200)
         plt.close(fig)
 
+def alpha_at_r(r, beta_tag=None):
+    '''
+    Plot alpha(r) as function of ell at given r.
+    '''
+
+    if beta_tag is None:
+        beta_file = 'beta.pkl'
+    else:
+        beta_file = 'beta_{}.pkl'.format(beta_tag)
+
+    beta = np.load(opj(beta_dir, beta_file))
+    beta_s = beta['beta_s']
+    beta_t = beta['beta_t']
+    radii = beta['radii']
+    ells = beta['ells']
+
+    # Radii are sorted
+    ridx = np.searchsorted(radii, r, side="left")
+    radius = radii[ridx]
+    pidx = 0
+    Lidx = 2
+    kidx = 1 # alpha
+
+    fig, axs = plt.subplots(ncols=1, sharey=False)
+    axs.plot(ells, beta_s[:,Lidx,kidx,pidx,ridx])
+    axs.set_xlabel(r'Multipole [$\ell$]')
+    axs.set_ylabel(r'$\alpha_{\ell}(r)$')
+    axs.set_title('scalar')
+    axs.set_xscale('log')
+    fig.tight_layout()
+    fig.savefig(opj(img_dir, 'alpha_scalar_p{}_L{}_r{}.png'.format(
+        pidx, Lidx, radius)))
+    plt.close(fig)
+
+    
+    # compare to camb
+    ana_dir = '/mn/stornext/d8/ITA/spider/adri/analysis/20171217_sst/camb_output/beta/'
+    alpha = np.load(opj(ana_dir, 'test__alpha.npy'))
+    beta = np.load(opj(ana_dir, 'test__beta.npy'))
+    err = np.load(opj(ana_dir, 'test__alpha_beta_r.npy'))
+
+    ridx_c = np.searchsorted(err, r, side="left")
+    radius = err[ridx_c]
+    ells_c = np.arange(2, alpha.shape[1]+2)
+
+    fig, axs = plt.subplots(ncols=1, sharey=False)
+    axs.plot(ells_c, alpha[ridx_c,:])
+    axs.set_xlabel(r'Multipole [$\ell$]')
+    axs.set_ylabel(r'$\alpha_{\ell}(r)$')
+    axs.set_title('scalar')
+    axs.set_xscale('log')
+    fig.tight_layout()
+    fig.savefig(opj(img_dir, 'alpha_camb_scalar_p{}_L{}_r{}.png'.format(
+        pidx, Lidx, radius)))
+    plt.close(fig)
+
+def alpha_at_ell(ell, beta_tag=None):
+    '''
+    Plot alpha(r) as function of r at given multipole.
+    '''
+
+    if beta_tag is None:
+        beta_file = 'beta.pkl'
+    else:
+        beta_file = 'beta_{}.pkl'.format(beta_tag)
+
+    beta = np.load(opj(beta_dir, beta_file))
+    beta_s = beta['beta_s']
+    beta_t = beta['beta_t']
+    radii = beta['radii']
+    ells = beta['ells']
+
+    lidx = np.where(ells==ell)[0][0]
+    pidx = 0
+    Lidx = 2
+    kidx = 1 # alpha
+
+    fig, axs = plt.subplots(ncols=1, sharey=False)
+    axs.plot(radii, beta_s[lidx,Lidx,kidx,pidx,:])
+    axs.set_xlabel(r'Comoving radius $r$ [$\mathrm{Mpc}$]')
+    axs.set_ylabel(r'$\alpha_{\ell}(r)$')
+    axs.set_title('scalar')
+    fig.tight_layout()
+    fig.savefig(opj(img_dir, 'alpha_scalar_p{}_L{}_l{}.png'.format(
+        pidx, Lidx, ell)))
+    plt.close(fig)
+
+    # zoom in around recombination
+    ridx_low = np.searchsorted(radii, 13000, side="left")
+    ridx_hi = np.searchsorted(radii, 15000, side="left")
+
+    
+    fig, axs = plt.subplots(ncols=1, sharey=False)
+    axs.plot(radii[ridx_low:ridx_hi], beta_s[lidx,Lidx,kidx,pidx,ridx_low:ridx_hi])
+    axs.set_xlabel(r'Comoving radius $r$ [$\mathrm{Mpc}$]')
+    axs.set_ylabel(r'$\alpha_{\ell}(r)$')
+    axs.set_title('scalar')
+    fig.tight_layout()
+    fig.savefig(opj(img_dir, 'alpha_scalar_zoom_p{}_L{}_l{}.png'.format(
+        pidx, Lidx, ell)))
+    plt.close(fig)
+
+
+    # compare to camb
+    ana_dir = '/mn/stornext/d8/ITA/spider/adri/analysis/20171217_sst/camb_output/beta/'
+    alpha = np.load(opj(ana_dir, 'test__alpha.npy'))
+    beta = np.load(opj(ana_dir, 'test__beta.npy'))
+    err = np.load(opj(ana_dir, 'test__alpha_beta_r.npy'))
+
+    ells_c = np.arange(2, alpha.shape[1]+2)
+    lidx = np.where(ells_c==ell)[0][0]
+
+    fig, axs = plt.subplots(ncols=1, sharey=False)
+    axs.plot(err, alpha[:,lidx])
+    axs.set_xlabel(r'Comoving radius $r$ [$\mathrm{Mpc}$]')
+    axs.set_ylabel(r'$\alpha_{\ell}(r)$')
+    axs.set_title('scalar')
+    fig.tight_layout()
+    fig.savefig(opj(img_dir, 'alpha_camb_scalar_p{}_L{}_l{}.png'.format(
+        pidx, Lidx, ell)))
+    plt.close(fig)
+
+
+    # zoom in around recombination
+    ridx_low = np.searchsorted(err, 13000, side="left")
+    ridx_hi = np.searchsorted(err, 15000, side="left")
+
+    
+    fig, axs = plt.subplots(ncols=1, sharey=False)
+    axs.plot(err[ridx_low:ridx_hi], alpha[ridx_low:ridx_hi,lidx])
+    axs.set_xlabel(r'Comoving radius $r$ [$\mathrm{Mpc}$]')
+    axs.set_ylabel(r'$\alpha_{\ell}(r)$')
+    axs.set_title('scalar')
+    fig.tight_layout()
+    fig.savefig(opj(img_dir, 'alpha_camb_scalar_zoom_p{}_L{}_l{}.png'.format(
+        pidx, Lidx, ell)))
+    plt.close(fig)
+
 if __name__ == '__main__':
     
     base_dir = '/mn/stornext/d8/ITA/spider/adri/analysis/'
@@ -267,5 +402,7 @@ if __name__ == '__main__':
     beta_dir = opj(base_dir, '20181123_sst/precomputed')
     img_dir = opj(base_dir, '20181123_sst/img/beta/')
 
-    plot_alpha_beta(beta_dir, img_dir)
+#    plot_alpha_beta(beta_dir, img_dir, beta_tag='r1_i40_l4000')
     # plot_alpha_beta_matrix(beta_dir, img_dir)
+#    alpha_at_r(13306.4, beta_tag='r1_i40_l4000')
+    alpha_at_ell(2500, beta_tag='r1_i40_l4000')

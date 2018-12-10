@@ -1102,7 +1102,6 @@ class PreCalc(MPIBase):
                 # To have correct next print statement.
                 sys.stdout.write('\n')
 
-
         beta_s *= (2 / np.pi)
         beta_t *= (2 / np.pi)
 
@@ -1287,7 +1286,9 @@ class PreCalc(MPIBase):
         self.beta['bins'] = bins
 
         return
-
+        
+#    def _bin_beta(self, beta_s, beta_t, bins, ells_out, L_range, )
+        
 class Template(object):
     '''
     Create n k-functions in arrays of shape (n, k.size)
@@ -1307,19 +1308,17 @@ class Template(object):
         where f = 16 pi^4 As^2 fnl * S
 
         S (shape) is for (see Planck XVII):
-        local: S = 2(1/(k1k2)^3 + cycl.),
-        equil: S = 6(-1/(k1k2)^3 - cycl.  - 2/(k1k2k3)^2 + 1/(k1k2k3^3) )
-        ortho: S = 6(-3/(k1k2)^3 - cycl.  - 8/(k1k2k3)^2 + 1/(k1k2k3^3) )
+        local: S = 2(1/(k1k2)^3 + 2 perm.),
+        equil: S = 6(-1/(k1k2)^3 - 2 perm.  - 2/(k1k2k3)^2 + 1/(k1k2^2k3^3 + 5 perm.) )
+        ortho: S = 6(-3/(k1k2)^3 - 2 perm.  - 8/(k1k2k3)^2 + 3/(k1k2^2k3^3 + 5 perm.) )
 
         For local we only need alpha and beta.
         For equilateral and orthgonal we need alpha, beta, gamma, delta
         (see Creminelli et al. 2005).
         '''
 
-        # You don't have to get primordial parameters from CAMB
-        # transfer functions don't depend on them
+        # NOTE, remove all of this?
         self.scalar_amp = 2.1e-9
-        # NOTE (2pi)^3????
         # self.common_amp = (2*np.pi)**3 * 16 * np.pi**4 * self.scalar_amp**2
         # this is the amplitude in e.g. f(k1, k2, k3) = amp * local
         self.common_amp = 16 * np.pi**4 * self.scalar_amp**2
@@ -1358,6 +1357,7 @@ class Template(object):
             k = self.depo['scalar']['k']
 
         km3 = k**-3
+#        km3 = k**-3 * (k / 0.05) ** (0.96-1) # NOTE
         ones = np.ones(k.size)
 
         template = np.asarray([km3, ones])
@@ -1496,7 +1496,8 @@ class Fisher(Template, PreCalc):
         self.bispec['pol_trpl'] = pol_trpl
 
 #    @profile
-    def _binned_bispectrum(self, DL1, DL2, DL3, prim_template='local'):
+    def _binned_bispectrum(self, DL1, DL2, DL3, prim_template='local',
+                           radii_sub=None):
         '''
         Return binned bispectrum for given \Delta L triplet.
 
@@ -1505,6 +1506,16 @@ class Fisher(Template, PreCalc):
         DL1 : Delta L_1
         DL2 : Delta L_2
         DL3 : Delta L_3
+
+        Keyword arguments
+        -----------------
+        prim_template : str
+            Either "local", "equilateral" or "orthogonal". 
+            (default : local)
+        radii_sub : array-like, None
+            If array, use these radii instead of those used for
+            beta. Radii must be a subset the beta radii.
+            (default : None)
 
         Returns
         -------
@@ -1528,12 +1539,26 @@ class Fisher(Template, PreCalc):
         pol_trpl = self.bispec['pol_trpl']
         psize = pol_trpl.shape[0]
 
-        # binned betas
+        # Binned betas.
         beta_s = self.beta['b_beta_s']
         beta_t = self.beta['b_beta_t']
 
         # Get radii used for beta
-        radii = self.beta['radii']
+        if radii_sub is None:
+            radii = self.beta['radii']
+        else:
+            radii_full = list(self.beta['radii'])
+            # Find elements of radii_sub in radii_full.
+            ridxs = np.ones(len(radii_sub), dtype=int)
+            for ridx, r in enumerate(radii_sub):
+                # Raises error when r is not found.
+                ridxs[ridx] = radii_full.index(r)
+            
+            # Reshape betas to radii_sub. Makes copy
+            beta_s = np.ascontiguousarray(beta_s[...,ridxs])
+            beta_t = np.ascontiguousarray(beta_t[...,ridxs])
+            radii = radii_sub
+
         r2 = radii**2
 
         # allocate r arrays
@@ -1897,7 +1922,6 @@ class Fisher(Template, PreCalc):
                         # Multiply by num (note, already floats)
                         # Note that for plotting purposes, you need to remove
                         # the num factor again
-                        # Note, in Fisher, num cancels with binned (Cl)^-1's
                         bispec *= float(num)
 
                         bispectrum[idxb,idx2,idx3,pidx] = bispec
@@ -1992,7 +2016,7 @@ class Fisher(Template, PreCalc):
 
         return binned_bispec
 
-    def get_binned_bispec(self, prim_template, load=True):
+    def get_binned_bispec(self, prim_template, load=True, tag=None):
         '''
         Compute binned bispectrum or load from disk.
 
@@ -2006,10 +2030,18 @@ class Fisher(Template, PreCalc):
         -----------------
         load : bool
             Try to load bispectrum + properties.
+        tag : str, None
+            Tag appended to stored/loaded .pkl file as
+            bispec_<prim_template>_<tag>.pkl. (default : None)
+
         '''
 
         path = self.subdirs['precomputed']
-        bispec_file = opj(path, 'bispec_{}.pkl'.format(prim_template))
+        if tag is None:
+            bispec_file = opj(path, 'bispec_{}.pkl'.format(prim_template))
+        else:
+            bispec_file = opj(path, 'bispec_{}_{}.pkl'.format(
+                prim_template, tag))
         recompute = not load
 
         if load:
@@ -2062,7 +2094,7 @@ class Fisher(Template, PreCalc):
                     pickle.dump(self.bispec, handle,
                                 protocol=pickle.HIGHEST_PROTOCOL)
 
-    def get_bins(self, load=True, **kwargs):
+    def get_bins(self, load=True, tag=None, **kwargs):
         '''
         Init bins or load from disk.
 
@@ -2070,11 +2102,17 @@ class Fisher(Template, PreCalc):
         -----------------
         load : bool
             Try to load bispectrum + properties.
+        tag : str, None
+            Tag appended to stored/loaded .pkl file as bins_<tag>.pkl.
+            (default : None)
         kwargs : {init_bins_opts}
         '''
 
         path = self.subdirs['precomputed']
-        bins_file = opj(path, 'bins.pkl')
+        if tag is None:
+            bins_file = opj(path, 'bins.pkl')
+        else:
+            bins_file = opj(path, 'bins_{}.pkl'.format(tag))
         recompute = not load
 
         if load:
@@ -2176,19 +2214,25 @@ class Fisher(Template, PreCalc):
                                 protocol=pickle.HIGHEST_PROTOCOL)
 
 
-    def get_beta(self, load=True, **kwargs):
+    def get_beta(self, load=True, tag=None, **kwargs):
         '''
         Compute binned bispectrum or load from disk.
 
         Keyword arguments
         -----------------
         load : bool
-            Try to load bispectrum + properties.
+            Try to load bispectrum + properties. (default : True)
+        tag : str, None
+            Tag appended to stored/loaded .pkl file as beta_<tag>.pkl.
+            (default : None)
         kwargs : {beta_opts}
         '''
 
         path = self.subdirs['precomputed']
-        beta_file = opj(path, 'beta.pkl')
+        if tag is None:
+            beta_file = opj(path, 'beta.pkl')
+        else:
+            beta_file = opj(path, 'beta_{}.pkl'.format(tag))
         recompute = not load
 
         if load:

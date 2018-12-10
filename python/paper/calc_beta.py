@@ -1,5 +1,5 @@
 '''
-Calculate and save beta.
+Calculate and save bins, beta and/or bispectrum.
 '''
 
 import matplotlib
@@ -18,7 +18,6 @@ from sst import Fisher
 
 opj = os.path.join
 
-
 def run(prim_template='equilateral', out_dir=None, camb_dir=None, lmin=2, lmax=5000):
     '''    
     Calculate and save beta.
@@ -33,9 +32,9 @@ def run(prim_template='equilateral', out_dir=None, camb_dir=None, lmin=2, lmax=5
     '''
 
     camb_opts = dict(camb_out_dir = camb_dir,
-                     tag='r0',
+                     tag='',
                      lensed=False,
-                     high_ell=True,
+                     high_ell=False,
                      interp_factor=None)
 
     F = Fisher(out_dir)
@@ -43,12 +42,18 @@ def run(prim_template='equilateral', out_dir=None, camb_dir=None, lmin=2, lmax=5
     F.get_camb_output(**camb_opts)
     F.get_bins(lmin=lmin, lmax=lmax, load=False,
                 parity='odd', verbose=True)
-    exit()
+
+    interp_factor = 1
+    radii_factor = 1
+    beta_tag = 'r{}_i{}_l{}'.format(radii_factor, interp_factor, lmax)
+
     radii = F.get_updated_radii()
-    radii = radii[::40]
+    radii = radii[::radii_factor]
+
 
     F.get_beta(func=prim_template, radii=radii, verbose=True, optimize=True,
-               interp_factor=None, load=False, sparse=True)
+               interp_factor=interp_factor, load=False, sparse=True, tag=beta_tag)
+
     F.get_binned_bispec('equilateral', load=False)
 
 if __name__ == '__main__':
@@ -61,8 +66,8 @@ if __name__ == '__main__':
     # camb_dir = opj(base_dir, '20171217_sst/camb_output/high_acy/sparse_5000')
     # camb_dir = opj(base_dir, '20171217_sst/camb_output/high_acy/nolens_4000')
     # camb_dir = opj(base_dir, '20171217_sst/camb_output/high_acy/nolens_5200')
-    # camb_dir = opj(base_dir, '20180911_sst/camb_output/lensed_r0_4000')
-    camb_dir = opj(base_dir, '20171217_sst/camb_output/high_acy/sparse_5000')
+    camb_dir = opj(base_dir, '20180911_sst/camb_output/lensed_r0_4000')
+    # camb_dir = opj(base_dir, '20171217_sst/camb_output/high_acy/sparse_5000')
 
-    run(out_dir=out_dir, camb_dir=camb_dir, lmax=500)
+    run(out_dir=out_dir, camb_dir=camb_dir, lmax=4000)
 

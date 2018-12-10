@@ -37,7 +37,7 @@ def get_cls(cls_path, lmax, A_lens=1):
 
     return cls_lensed
 
-def get_nls(lat_path, sac_path, lmax, 
+def get_nls(lat_path, lmax, sac_path=None,
             deproj_level=0):
     '''
 
@@ -45,12 +45,12 @@ def get_nls(lat_path, sac_path, lmax,
     -----------------
     lat_path : str
         Path to folder containing LAT noise cuves
-    sac_path : str
-        Path to folder containing SAC noise cuves
     lmax : int
     
     Keyword Arguments
     -----------------
+    sac_path : str, None
+        Path to folder containing SAC noise cuves
     deproj_level : int
         Foreground cleaning assumption, 0 - 4
         0 is most optimistic
@@ -66,13 +66,18 @@ def get_nls(lat_path, sac_path, lmax,
     SAT TT for TT.       
     '''
 
+    # Add option to skip SAT.
+    # SO V3 (deproj0, S2(goal) 16000 deg2
+
     # init noise curves (fill with 1K^2 noise)
     # truncate later
     nls = np.ones((6, 20000)) * 1e12
 
-    # load up LAT and SAC
-    lat_tt_file = 'S4_2LAT_T_default_noisecurves_'\
-        'deproj{}_SENS0_mask_16000_ell_TT_yy.txt'.format(deproj_level)
+    # load up LAT
+#    lat_tt_file = 'S4_2LAT_T_default_noisecurves_'\
+#        'deproj{}_SENS0_mask_16000_ell_TT_yy.txt'.format(deproj_level) # NOTE
+    lat_tt_file = 'SOV3_T_default1-4-2_noisecurves_'\
+        'deproj{}_SENS2_mask_16000_ell_TT_yy.txt'.format(deproj_level)
                                                        
     lat_pol_file = lat_tt_file.replace('_T_', '_pol_')
     lat_pol_file = lat_pol_file.replace('_TT_yy', '_EE_BB')
@@ -80,9 +85,6 @@ def get_nls(lat_path, sac_path, lmax,
     lat_tt_file = opj(lat_path, lat_tt_file)
     lat_pol_file = opj(lat_path, lat_pol_file)
 
-    sac_file = 'Db_noise_04.00_ilc_bin3_av.dat'
-    sac_file = opj(sac_path, sac_file)
-    
     # load lat
     ells_tt, nl_tt, ells_pol, nl_ee, nl_bb = ct.get_so_noise(
         tt_file=lat_tt_file, pol_file=lat_pol_file, sat_file=None)
@@ -94,25 +96,70 @@ def get_nls(lat_path, sac_path, lmax,
     lmin_pol = 30 # as suggested on wiki
     lmax_pol = int(ells_pol[-1])
 
-    # load sac, note these are Dell bandpowers
-    ell, sac_ee, sac_bb = np.loadtxt(sac_file).transpose()
-    dell = ell * (ell + 1) / 2. / np.pi
-    sac_ee /= dell
-    sac_bb /= dell
+    if sac_path is not None:
+        sac_file = 'Db_noise_04.00_ilc_bin3_av.dat'
+        sac_file = opj(sac_path, sac_file)
+    
+        # load sac, note these are Dell bandpowers
+        ell, sac_ee, sac_bb = np.loadtxt(sac_file).transpose()
+        dell = ell * (ell + 1) / 2. / np.pi
+        sac_ee /= dell
+        sac_bb /= dell
 
-    # interpolate
-    lmin_sac = int(ell[0])
-    lmax_sac = int(ell[-1])
-    ell_f = np.arange(lmin_sac, lmax_sac+1)
-    sac_ee = np.interp(ell_f, ell, sac_ee)
-    sac_bb = np.interp(ell_f, ell, sac_bb)
+        # interpolate
+        lmin_sac = int(ell[0])
+        lmax_sac = int(ell[-1])
+        ell_f = np.arange(lmin_sac, lmax_sac+1)
+        sac_ee = np.interp(ell_f, ell, sac_ee)
+        sac_bb = np.interp(ell_f, ell, sac_bb)
 
-    # combine, first lat then sac because lat has lower lmin
+    # combine, first lat then (if needed )sac because lat has lower lmin
     nls[0,lmin_tt - 2:lmax_tt - 1] = nl_tt 
     nls[1,lmin_pol - 2:lmax_pol - 1] = nl_ee[ells_pol >= lmin_pol] 
-    nls[1,lmin_sac - 2:lmax_sac - 1] = sac_ee
     nls[2,lmin_pol - 2:lmax_pol - 1] = nl_bb[ells_pol >= lmin_pol] 
-    nls[2,lmin_sac - 2:lmax_sac - 1] = sac_bb
+    nls[3] *= 0.
+    nls[4] *= 0.
+    nls[5] *= 0.
+    
+    if sac_path is not None:
+        nls[1,lmin_sac - 2:lmax_sac - 1] = sac_ee
+        nls[2,lmin_sac - 2:lmax_sac - 1] = sac_bb
+
+    # trunacte to lmax
+    nls = nls[:,:lmax - 1]
+
+    return nls
+
+def get_fiducial_nls(noise_amp_temp, noise_amp_pol, lmax):
+    '''
+    Create N_{\ell} = noise_amp^2 noise arrays.
+
+    Arguments
+    -----------------
+    noise_amp_temp : float
+        Noise ampltidue in uK arcmin.
+    noise_amp_pol : float
+    lmax : int
+    
+    Returns
+    -------
+    nls : array-like
+        Shape (6, lmax - 1), order: TT, EE, BB, TE, TB, EB
+    '''
+
+    # init noise curves (fill with 1K^2 noise)
+    # truncate later
+    nls = np.ones((6, 20000)) * 1e12
+
+    # N_{\ell} = uK^2 radians^2
+    arcmin2radians = np.pi / 180. / 60.
+    noise_amp_temp *= arcmin2radians
+    noise_amp_pol *= arcmin2radians
+
+    # combine, first lat then sac because lat has lower lmin
+    nls[0,:] = noise_amp_temp ** 2
+    nls[1,:] = noise_amp_pol ** 2
+    nls[2,:] = noise_amp_pol ** 2 
     nls[3] *= 0.
     nls[4] *= 0.
     nls[5] *= 0.
@@ -148,7 +195,7 @@ def get_totcov(cls, nls, no_ee=False, no_tt=False):
     return totcov
 
 def run_fisher(template, ana_dir, camb_dir, totcov, lmin=2, lmax=4999,fsky=0.03, 
-               plot_tag=''):
+               plot_tag='', tag=None):
     
     F = Fisher(ana_dir)
     camb_opts = dict(camb_out_dir=camb_dir,
@@ -159,9 +206,11 @@ def run_fisher(template, ana_dir, camb_dir, totcov, lmin=2, lmax=4999,fsky=0.03,
     F.get_camb_output(**camb_opts)
     radii = F.get_updated_radii()
     radii = radii[::2]
-    F.get_bins(lmin=lmin, lmax=lmax, load=True, verbose=False, parity='odd')
-    F.get_beta(func='equilateral', load=True, verbose=False, radii=radii)
-    F.get_binned_bispec(template, load=True)
+    F.get_bins(lmin=lmin, lmax=lmax, load=True, verbose=False, parity='odd', tag=tag)
+ #   F.get_beta(func='equilateral', load=True, verbose=False, radii=radii, tag=tag)
+    F.get_beta(func='local', load=True, verbose=False, radii=radii, tag=tag+'_w_ns')
+#    F.get_binned_bispec(template, load=True, tag=tag)
+    F.get_binned_bispec(template, load=True, tag=tag+'_w_ns') 
 
     amp = get_prim_amp(template)
     F.bispec['bispec'] *= amp
@@ -186,8 +235,6 @@ def run_fisher(template, ana_dir, camb_dir, totcov, lmin=2, lmax=4999,fsky=0.03,
                           bins, bin_cov, log=False, plot_dell=False, 
                           **plot_opts)
     
-    return None, None
-
     # allocate bin-sized fisher matrix (same size as outer loop)
     fisher_per_bin = np.ones(bin_size) * np.nan
 
@@ -225,21 +272,23 @@ def run_fisher(template, ana_dir, camb_dir, totcov, lmin=2, lmax=4999,fsky=0.03,
     # Depending on lmin, start outer loop not at first bin.
     start_bidx = np.where(bins >= lmin)[0][0]
 
+    end_bidx = np.where(bins >= min(lmax, bins[-1]))[0][0] + 1
+
     # loop same loop as in binned_bispectrum
-    for idx1, i1 in enumerate(bins[start_bidx:]):
+    for idx1, i1 in enumerate(bins[start_bidx:end_bidx]):
         idx1 += start_bidx
         cl1 = invcov1[idx1,:,:] # 12x12
 
         # init
         fisher_per_bin[idx1] = 0.
 
-        for idx2, i2 in enumerate(bins[idx1:]):
+        for idx2, i2 in enumerate(bins[idx1:end_bidx]):
             idx2 += idx1
             cl2 = invcov2[idx1,:,:] # 12x12
 
             cl12 = cl1 * cl2
 
-            for idx3, i3 in enumerate(bins[idx2:]):
+            for idx3, i3 in enumerate(bins[idx2:end_bidx]):
                 idx3 += idx2
 
                 num = num_pass[idx1,idx2,idx3]
@@ -251,8 +300,8 @@ def run_fisher(template, ana_dir, camb_dir, totcov, lmin=2, lmax=4999,fsky=0.03,
                 B = bispec[idx1,idx2,idx3,:]
 
                 f = np.einsum("i,ij,j", B, cl123, B)
-                f0 = np.einsum("i,i", B, B)
-                b0 = np.einsum("ij,ij", cl123, cl123)
+#                f0 = np.einsum("i,i", B, B)
+#                b0 = np.einsum("ij,ij", cl123, cl123)
 
                 # both B's have num 
                 f /= float(num)
@@ -289,56 +338,84 @@ def run_fisher(template, ana_dir, camb_dir, totcov, lmin=2, lmax=4999,fsky=0.03,
 
 if __name__ == '__main__':
 
-    ana_dir = '/mn/stornext/d8/ITA/spider/adri/analysis/20181112_sst/'
+#    ana_dir = '/mn/stornext/d8/ITA/spider/adri/analysis/20181112_sst/' # S5
+    ana_dir = '/mn/stornext/d8/ITA/spider/adri/analysis/20181123_sst/'
+    out_dir = opj(ana_dir, 'fisher')
     camb_base = '/mn/stornext/d8/ITA/spider/adri/analysis/20171217_sst'
     camb_dir = opj(camb_base, 'camb_output/high_acy/sparse_5000')
-    noise_base = '/mn/stornext/u3/adriaand/cmb_sst_ksw/ancillary/noise_curves/s4'
-    lat_path = opj(noise_base, 'S4_2LAT_Tpol_default_noisecurves')
-    sac_path = noise_base
+    noise_base = '/mn/stornext/u3/adriaand/cmb_sst_ksw/ancillary/noise_curves'
+#    noise_base = '/mn/stornext/u3/adriaand/cmb_sst_ksw/ancillary/noise_curves/so/v3/so'
+#    lat_path = opj(noise_base, 's4/S4_2LAT_Tpol_default_noisecurves')
+    lat_path = opj(noise_base, 'so/v3/so')
+#    sac_path = noise_base
+    sac_path = None
 
     # fixed
     lmin = 2
-    lmax = 4999
-    A_lens = 0.13
-    no_tt = False
+#    lmax = 4999
+    lmax = 4000 # has to match beta etc
+    lmax_f = 3000 # for fisher
+    lmin_f = 250
+#    A_lens = 0.13
+    A_lens = 1.
+
+    noise_amp_temp = 6.
+    noise_amp_pol = 6 * np.sqrt(2)
+
+    # NOTE
+#    noise_amp_temp = .0
+#    noise_amp_pol = .0 * np.sqrt(2)
 
 
     opts = {}
-    opts['nominal'] = dict(fsky=0.03, no_ee=False, no_noise=False)
-    opts['cv_lim'] = dict(fsky=1, no_ee=False, no_noise=True)
-    opts['no_ee'] = dict(fsky=0.03, no_ee=True, no_noise=False)
+#    opts['nominal'] = dict(fsky=0.03, no_ee=False, no_tt=False, no_noise=False)
+#    opts['no_ee'] = dict(fsky=0.03, no_ee=True, no_tt=False, no_noise=False)
+#    opts['no_tt'] = dict(fsky=0.03, no_ee=False, no_tt=True, no_noise=False)
+    opts['nominal'] = dict(fsky=1., no_ee=False, no_tt=False, no_noise=False)
+    opts['no_ee'] = dict(fsky=1., no_ee=True, no_tt=False, no_noise=False)
+    opts['no_tt'] = dict(fsky=1., no_ee=False, no_tt=True, no_noise=False)
 
-    out_dir = opj(ana_dir, 'fisher')
+    opts['cv_lim'] = dict(fsky=1., no_ee=False, no_tt=False, no_noise=True)
+    opts['no_ee_cv_lim'] = dict(fsky=1., no_ee=True, no_tt=False, no_noise=True)
+    opts['no_tt_cv_lim'] = dict(fsky=1., no_ee=False, no_tt=True, no_noise=True)
 
-    with open(opj(out_dir, 'fisher.txt'), 'w') as text_file:
+    for template in ['local', 'equilateral']:            
+#        with open(opj(out_dir, 'fisher_{}.txt'.format(template)), 'w') as text_file:
+        with open(opj(out_dir, 'fisher_so_{}.txt'.format(template)), 'w') as text_file:
 
-        for key in opts:
+            for key in opts:
 
-            opt = opts[key]
-            no_noise = opt.get('no_noise')
-            fsky = opt.get('fsky')
-            no_ee = opt.get('no_ee')
+                opt = opts[key]
+                no_noise = opt.get('no_noise')
+                fsky = opt.get('fsky')
+                no_ee = opt.get('no_ee')
+                no_tt = opt.get('no_tt')
 
-            cls = get_cls(camb_dir, lmax, A_lens=A_lens)
-            nls = get_nls(lat_path, sac_path, lmax)
-            if no_noise:
-                nls *= 0.
-            totcov = get_totcov(cls, nls, no_ee=no_ee, no_tt=no_tt)
+                cls = get_cls(camb_dir, lmax, A_lens=A_lens)
+                nls = get_nls(lat_path, lmax, sac_path=sac_path)
+                #nls = get_fiducial_nls(noise_amp_temp, noise_amp_pol, lmax)
+                if no_noise:
+                    nls *= 0.
+                totcov = get_totcov(cls, nls, no_ee=no_ee, no_tt=no_tt)
 
-            plot_name = opj(out_dir, 'b_invcov_{}.png'.format(key))
+#                plot_name = opj(out_dir, 'b_invcov_{}.png'.format(key))
+                plot_name = opj(out_dir, 'b_so_invcov_{}.png'.format(key))
 
-            for template in ['local', 'equilateral', 'orthogonal']:            
+    #            for template in ['local', 'equilateral', 'orthogonal']:            
+
                 text_file.write('template: {}\n'.format(template))
                 text_file.write('option: {}\n'.format(key))
                 text_file.write('no_noise: {}\n'.format(no_noise))
                 text_file.write('fsky: {}\n'.format(fsky))
+                text_file.write('A_lens: {}\n'.format(A_lens))
                 text_file.write('no_ee: {}\n'.format(no_ee))
+                text_file.write('no_tt: {}\n'.format(no_tt))
 
                 fisher_check, sigma = run_fisher(template, 
-                                ana_dir, camb_dir, totcov, 
-                                lmin=lmin, lmax=lmax, fsky=fsky, 
-                                plot_tag=plot_name)
+                                                 ana_dir, camb_dir, totcov, 
+                                                 lmin=lmin_f, lmax=lmax_f, fsky=fsky, 
+                                                 plot_tag=plot_name, tag='r1_i40_l4000')
 
-                text_file.write('fisher_check: {}\n'.format(fisher_check))
+                text_file.write('fisher: {}\n'.format(fisher_check))
                 text_file.write('sigma: {}\n'.format(sigma))
                 text_file.write('\n')

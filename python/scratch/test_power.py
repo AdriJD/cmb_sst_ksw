@@ -11,17 +11,20 @@ import numpy as np
 from scipy.special import spherical_jn
 from scipy.integrate import trapz
 sys.path.insert(0,'./../')
-import fisher
+from sst import PreCalc
 
 opj = os.path.join
 
 ana_dir = '/mn/stornext/d8/ITA/spider/adri/analysis/20180911_sst/'
 ana_dir2 = '/mn/stornext/d8/ITA/spider/adri/analysis/20171217_sst/'
-out_dir = opj(ana_dir, 'transfer2cl')
+#out_dir = opj(ana_dir, 'transfer2cl')
+out_dir = '/mn/stornext/d8/ITA/spider/adri/analysis/20181128_sst_py_vs_fortran/img'
 #camb_dir = opj(ana_dir, 'camb_output/lensed_r0_4000/')
-camb_dir = opj(ana_dir2, 'camb_output/high_acy/nolens/high_r')
+#camb_dir = opj(ana_dir2, 'camb_output/high_acy/nolens/high_r') #NOTE high r
+camb_dir = opj(ana_dir2, 'camb_output/high_acy/nolens')
+#camb_dir = opj(ana_dir2, 'camb_output/high_acy/no_lens_4000')
 
-F = fisher.Fisher()
+F = PreCalc()
 
 F.get_camb_output(camb_out_dir=camb_dir, tag='no_lens', lensed=False, prim_type='scalar',
                   high_ell=False)
