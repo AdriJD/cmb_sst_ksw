@@ -1976,7 +1976,7 @@ class Fisher(Template, PreCalc):
             # no MPI, so process already has full bispectrum
             return bispectrum
 
-    def _compute_binned_bispec(self, prim_template):
+    def _compute_binned_bispec(self, prim_template, radii_sub=None):
         '''
         Compute the combined binned bispectra from all
         allowed L values.
@@ -2009,14 +2009,17 @@ class Fisher(Template, PreCalc):
 
             if Lidx == 0:
                 binned_bispec = self._binned_bispectrum(*L_tup, 
+                                    radii_sub=radii_sub,
                                     prim_template=prim_template)
             else:
                 binned_bispec += self._binned_bispectrum(*L_tup,
+                                    radii_sub=radii_sub,
                                     prim_template=prim_template)
 
         return binned_bispec
 
-    def get_binned_bispec(self, prim_template, load=True, tag=None):
+    def get_binned_bispec(self, prim_template, load=True, 
+                          radii_sub=None, tag=None):
         '''
         Compute binned bispectrum or load from disk.
 
@@ -2081,7 +2084,8 @@ class Fisher(Template, PreCalc):
             
             self.init_wig3j()
             self.init_pol_triplets(single_bmode=True)
-            b_bispec = self._compute_binned_bispec(prim_template)
+            b_bispec = self._compute_binned_bispec(prim_template,
+                                                   radii_sub=radii_sub)
             self.bispec['bispec'] = b_bispec
 
             # Save for next time.
