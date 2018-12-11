@@ -2299,13 +2299,6 @@ class Fisher(Template, PreCalc):
         Stores shape = (ells, 3, 3) array. ells is unbinned.
         '''
 
-        # if you allow nans, you can make a bad_mask and bad_mask_bin
-        # replace nans with 1s, run function, 
-        # add nans back 
-        # store masks -> useful for plotting. 
-        # populate fisher dict
-        # save cls, nls, cov, invcov, binned versions, A_lens, fsky
-
         if ells is None:
             ells = self.bins['ells']
 
@@ -2396,10 +2389,9 @@ class Fisher(Template, PreCalc):
     # so load invov gives you fisher dict, then naive_fisher just populates
     # the fisher attribute.
 
-    def naive_fisher(self, lmin, lmax, out_dir, nls_tot, bispec,
-                     bins, num_pass, pol_trpl,
-                     prim_template='local',
-                     fsky=1, A_lens=1., plot_label=''):
+    def naive_fisher(self, lmin, lmax, nls_tot, fsky=1,
+                     bispec=None, bins=None, num_pass=None,
+                     pol_trpl=None):
         '''
         Calculate the fisher information by squaring bins.
 
@@ -2422,9 +2414,95 @@ class Fisher(Template, PreCalc):
 
         '''
 
-        # use fisher dict to get b_mask, add 1e12 to all bad values
-        # paste function from get_fisher_new.py
+        self.get_binned_invcov(nls_tot=nls_tot)
+        bin_invcov = self.bin_invcov
+        bin_cov = self.bin_cov
 
+        bin_size = self.bins['bins'].size
+        bins = self.bins['bins']
+        num_pass = self.bins['num_pass_full']
+        bispec = self.bispec['bispec']
+
+        # allocate 12 x 12 cov for use in inner loop
+        invcov = np.zeros((self.bispec['pol_trpl'].size, self.bispec['pol_trpl'].size))
+
+        # create (binned) inverse cov matrix for each ell
+        # i.e. use the fact that 12x12 pol invcov can be factored
+        # as (Cl-1)_l1^ip (Cl-1)_l2^jq (Cl-1)_l3^kr 
+        invcov1 = np.ones((bin_size, 12, 12))
+        invcov2 = np.ones((bin_size, 12, 12))
+        invcov3 = np.ones((bin_size, 12, 12))
+
+        f_check = 0
+
+        for tidx_a, ptrp_a in enumerate(self.bispec['pol_trpl']):
+            # ptrp_a = ijk
+            for tidx_b, ptrp_b in enumerate(self.bispec['pol_trpl']):
+                # ptrp_a = pqr
+                # a is first bispectrum, b second one
+                # ptrp = pol triplet
+
+                ptrp_a1 = ptrp_a[0]
+                ptrp_a2 = ptrp_a[1]
+                ptrp_a3 = ptrp_a[2]
+
+                ptrp_b1 = ptrp_b[0]
+                ptrp_b2 = ptrp_b[1]
+                ptrp_b3 = ptrp_b[2]
+
+                invcov1[:,tidx_a,tidx_b] = bin_invcov[:,ptrp_a1,ptrp_b1]
+                invcov2[:,tidx_a,tidx_b] = bin_invcov[:,ptrp_a2,ptrp_b2]
+                invcov3[:,tidx_a,tidx_b] = bin_invcov[:,ptrp_a3,ptrp_b3]
+
+        # Depending on lmin, start outer loop not at first bin.
+        start_bidx = np.where(bins >= lmin)[0][0]
+        # Depending on lmax, possibly end loops earlier.
+        end_bidx = np.where(bins >= min(lmax, bins[-1]))[0][0] + 1
+
+        # loop same loop as in binned_bispectrum
+        for idx1, i1 in enumerate(bins[start_bidx:end_bidx]):
+            idx1 += start_bidx
+            cl1 = invcov1[idx1,:,:] # 12x12
+
+
+            for idx2, i2 in enumerate(bins[idx1:end_bidx]):
+                idx2 += idx1
+                cl2 = invcov2[idx1,:,:] # 12x12
+
+                cl12 = cl1 * cl2
+
+                for idx3, i3 in enumerate(bins[idx2:end_bidx]):
+                    idx3 += idx2
+
+                    num = num_pass[idx1,idx2,idx3]
+                    if num == 0:
+                        continue
+
+                    cl123 = cl12 * invcov3[idx3,:,:] #12x12
+
+                    B = bispec[idx1,idx2,idx3,:]
+
+                    f = np.einsum("i,ij,j", B, cl123, B)
+
+                    # both B's have num 
+                    f /= float(num)
+
+                    if i1 == i2 == i3:
+                        f /= 6.
+                    elif i1 != i2 != i3:
+                        pass
+                    else:
+                        f /= 2.
+
+                    f_check += f
+
+        f_check *= fsky
+
+        fisher_check = f_check * (4*np.pi / np.sqrt(8))**2
+        sigma = 1/np.sqrt(f_check) * (np.sqrt(8)/4./np.pi)
+
+        return fisher_check, sigma
+    
     def interp_fisher(self):
         '''
 
