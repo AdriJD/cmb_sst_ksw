@@ -95,8 +95,8 @@ def run(out_dir, num_chunks, camb_opts=None,
         print(F.bispec['bispec'][F.bins['num_pass'].astype(bool)].size)
         exit()
 
-        amp = get_prim_amp('equilateral')
-        F.bispec['bispec'] *= amp
+#        amp = get_prim_amp('equilateral') # not needed anymore
+#        F.bispec['bispec'] *= amp
         fisher, _ = F.naive_fisher(2, lmax, totcov, fsky=1)
         fisher_r[cidx] = fisher
         print(fisher)

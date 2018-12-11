@@ -905,13 +905,13 @@ class PreCalc(MPIBase):
             k = k_interp
 
         if func is None or func == 'local':
-            func, _ = self.local(k)
+            func = self.local(k)
             fname = 'local'
         elif func == 'equilateral':
-            func, _ = self.equilateral(k)
+            func = self.equilateral(k)
             fname = 'equilateral'
         elif func == 'orthogonal':
-            func, _ = self.orthogonal(k)
+            func = self.orthogonal(k)
             fname = 'orthogonal'
 
         self.beta['template'] = fname
@@ -1317,15 +1317,12 @@ class Template(object):
         (see Creminelli et al. 2005).
         '''
 
-        # NOTE, remove all of this?
         self.scalar_amp = 2.1e-9
-        # self.common_amp = (2*np.pi)**3 * 16 * np.pi**4 * self.scalar_amp**2
-        # this is the amplitude in e.g. f(k1, k2, k3) = amp * local
         self.common_amp = 16 * np.pi**4 * self.scalar_amp**2
 
         super(Template, self).__init__(**kwargs)
 
-    def local(self, k, fnl=1):
+    def local(self, k):
         '''
         Get the wavenumber arrays for the local template.
 
@@ -1334,20 +1331,12 @@ class Template(object):
         k : array-like, None
             Monotonically increasing array of wavenumbers.
 
-        Keyword arguments
-        -----------------
-        fnl : float
-            (default : 1)
-
         Returns
         -------
         template : array-like
             shape (2, k.size) used for beta (0), alpha (1).
             For beta we simply have k^-3, for alpha
             just an array of ones.
-        amp : float
-            scalar amplitude of bispectrum with local
-            shape: = 2 * fnl
 
         Notes
         -----
@@ -1357,15 +1346,13 @@ class Template(object):
             k = self.depo['scalar']['k']
 
         km3 = k**-3
-#        km3 = k**-3 * (k / 0.05) ** (0.96-1) # NOTE
         ones = np.ones(k.size)
 
         template = np.asarray([km3, ones])
-        amp = 2. * fnl
 
-        return template, amp
+        return template
 
-    def equilateral(self, k, fnl=1):
+    def equilateral(self, k):
         '''
         Get the wavenumber arrays for the equilateral template.
 
@@ -1374,20 +1361,12 @@ class Template(object):
         k : array-like, None
             Monotonically increasing array of wavenumbers.
 
-        Keyword arguments
-        -----------------
-        fnl : float
-            (default : 1)
-
         Returns
         -------
         template : array-like
             shape (2, k.size) used for beta (0), alpha (1).
             For beta we simply have k^-3, for alpha
             just an array of ones.
-        amp : float
-            scalar amplitude of bispectrum with equilateral
-            shape: = 6 * fnl
         '''
 
         if k is None:
@@ -1400,16 +1379,41 @@ class Template(object):
 
         # Keep same ordering as local.
         template = np.asarray([km3, ones, km2, km1])
-        amp = 6. * fnl
 
-        return template, amp
+        return template
 
-    def orthogonal(self, k, fnl=1):
+    def orthogonal(self, k):
         '''
         Note, same as equilateral.
         '''
 
-        return self.equilateral(k=k, fnl=fnl)
+        return self.equilateral(k=k)
+
+    def get_prim_amp(self, prim_template):
+        '''
+        Return the overal factor of given primordial
+        shape template: 2 of local, 6 for equillateral
+        and orthogonal.
+
+        Arguments
+        ---------
+        prim_template : str
+            Either "local", "equilateral" or "orthogonal"
+
+        Returns
+        -------
+        amp : float
+        '''
+
+        if prim_template == 'local':
+            return 2.
+
+        elif prim_template == 'equilateral':
+            return 6.
+
+        elif prim_template == 'orthogonal':
+            return 6.
+
 
 class Fisher(Template, PreCalc):
 
@@ -1926,7 +1930,7 @@ class Fisher(Template, PreCalc):
 
                         bispectrum[idxb,idx2,idx3,pidx] = bispec
 
-        bispectrum *= (8 * np.pi)**(3/2.) / 3.
+        bispectrum *= (8 * np.pi)**(3/2.) / 3. * self.get_prim_amp(prim_template)
 
         # Each rank has, for a unordered set of i1, the i2, i3, pol bispectra
         # Now we add them together on the root rank
@@ -2433,7 +2437,7 @@ class Fisher(Template, PreCalc):
         invcov2 = np.ones((bin_size, 12, 12))
         invcov3 = np.ones((bin_size, 12, 12))
 
-        f_check = 0
+        fisher = 0
 
         for tidx_a, ptrp_a in enumerate(self.bispec['pol_trpl']):
             # ptrp_a = ijk
@@ -2487,6 +2491,7 @@ class Fisher(Template, PreCalc):
                     # both B's have num 
                     f /= float(num)
 
+                    # Delta_l1l2l3.
                     if i1 == i2 == i3:
                         f /= 6.
                     elif i1 != i2 != i3:
@@ -2494,14 +2499,15 @@ class Fisher(Template, PreCalc):
                     else:
                         f /= 2.
 
-                    f_check += f
+                    fisher += f
 
-        f_check *= fsky
+        fisher *= fsky
+        fisher *= self.common_amp ** 2 # (16 pi^4 As^2)^2
 
-        fisher_check = f_check * (4*np.pi / np.sqrt(8))**2
-        sigma = 1/np.sqrt(f_check) * (np.sqrt(8)/4./np.pi)
+#        fisher_check = f_check * (4*np.pi / np.sqrt(8))**2
+#        sigma = 1/np.sqrt(f_check) * (np.sqrt(8)/4./np.pi)
 
-        return fisher_check, sigma
+        return fisher
     
     def interp_fisher(self):
         '''

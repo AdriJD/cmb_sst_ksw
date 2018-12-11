@@ -99,9 +99,10 @@ def read_camb_output(source_dir, ttype='scalar', high_ell=False):
     # both scalar and tensor have to be scaled with monopole in uK
     transfer *= 2.7255e6
 
-    # we scale tensor transfer by 1/(4pi) to match shiraishi's definition
+    # Scale tensor transfer by 1/4 to correct for CAMB output.
     if ttype == 'tensor':
-        transfer /= (4. * np.pi)
+#        transfer /= (4. * np.pi)
+        transfer /= 4.
 
     # dont interpolate transfer, it fluctuates too fast
     # instead, use sparsely sampled high ell part for beta

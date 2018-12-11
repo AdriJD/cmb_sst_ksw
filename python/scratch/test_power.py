@@ -18,7 +18,8 @@ opj = os.path.join
 ana_dir = '/mn/stornext/d8/ITA/spider/adri/analysis/20180911_sst/'
 ana_dir2 = '/mn/stornext/d8/ITA/spider/adri/analysis/20171217_sst/'
 #out_dir = opj(ana_dir, 'transfer2cl')
-out_dir = '/mn/stornext/d8/ITA/spider/adri/analysis/20181128_sst_py_vs_fortran/img'
+#out_dir = '/mn/stornext/d8/ITA/spider/adri/analysis/20181128_sst_py_vs_fortran/img'
+out_dir = '/mn/stornext/d8/ITA/spider/adri/analysis/20181211_sst_changes/img'
 #camb_dir = opj(ana_dir, 'camb_output/lensed_r0_4000/')
 #camb_dir = opj(ana_dir2, 'camb_output/high_acy/nolens/high_r') #NOTE high r
 camb_dir = opj(ana_dir2, 'camb_output/high_acy/nolens')
@@ -68,7 +69,8 @@ P_k_s = k_s**(-3) * (k_s / pivot) ** (ns-1)
 P_k_s *= scalar_amp 
 
 P_k_t = k_s**(-3)
-P_k_t *= scalar_amp * r * np.pi ** 2 # as in shiraisi (P_T = r P_S / 2
+#P_k_t *= scalar_amp * r * np.pi ** 2 # as in shiraisi (P_T = r P_S / 2
+P_k_t *= scalar_amp * r # as in shiraisi (P_T = r P_S / 2
 
 
 k2 = k_s**2
