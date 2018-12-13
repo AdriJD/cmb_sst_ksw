@@ -393,9 +393,8 @@ class PreCalc(MPIBase):
             return bins_on_rank, idxs_on_rank
 
 #    @profile
-    def init_bins(self, lmin=None, lmax=None,
-                  bins=None, parity='odd',
-                  verbose=False):
+    def init_bins(self, lmin=None, lmax=None, bins=None,
+                  parity='odd', verbose=False):
         '''
         Create default bins in ell-space. Stores attributes for
         unique_ells, bins, num_pass and first_pass
@@ -514,141 +513,55 @@ class PreCalc(MPIBase):
         if self.mpi:
             self.barrier()
 
-            method0 = True
-            method1 = False
-            method2 = False
+            if self.mpi_rank == 0 and verbose:
+                print('...done, gathering bins from all ranks...')
 
-            if method0:
+            # Allocate space to receive arrays on root.
+            if self.mpi_rank == 0:
+                num_pass_rec = np.empty((num_bins, num_bins, num_bins),
+                                        dtype=int)
+                first_pass_rec = np.empty((num_bins, num_bins, num_bins, 3),
+                                          dtype=int)
 
-                if self.mpi_rank == 0 and verbose:
-                    print('...done, gathering bins from all ranks...')
+                # Fill with arrays on root.
+                _, idxs_on_root = self.get_bins_on_rank(
+                    return_idx=True)
+                num_pass_rec[idxs_on_root] = num_pass
+                first_pass_rec[idxs_on_root] = first_pass
 
-                # Allocate space to receive arrays on root.
-                if self.mpi_rank == 0:
-                    num_pass_rec = np.empty((num_bins, num_bins, num_bins),
-                                            dtype=int)
-                    first_pass_rec = np.empty((num_bins, num_bins, num_bins, 3),
-                                              dtype=int)
+            # loop over all non-root ranks
+            for rank in xrange(1, self.mpi_size):
 
-                    # Fill with arrays on root.
-                    _, idxs_on_root = self.get_bins_on_rank(
-                        return_idx=True)
-                    num_pass_rec[idxs_on_root] = num_pass
-                    first_pass_rec[idxs_on_root] = first_pass
+                # Send arrays to root.
+                if self.mpi_rank == rank:
+                    self._comm.Send(num_pass, dest=0, tag=rank)
+                    self._comm.Send(first_pass, dest=0, tag=rank + self.mpi_size)
 
-                # loop over all non-root ranks
-                for rank in xrange(1, self.mpi_size):
-
-                    # Send arrays to root.
-                    if self.mpi_rank == rank:
-                        self._comm.Send(num_pass, dest=0, tag=rank)
-                        self._comm.Send(first_pass, dest=0, tag=rank + self.mpi_size)
-
-                        if verbose:
-                            print(self.mpi_rank, 'sent')
-
-                    # Receive the arrays on root.
-                    if self.mpi_rank == 0:
-
-                        _, idxs_on_rank = self.get_bins_on_rank(return_idx=True,
-                                                                rank=rank)
-                        num_bins_on_rank = idxs_on_rank.size
-                        # MPI needs contiguous array to receive.
-                        num_pass_rec_cont = np.empty((num_bins_on_rank, num_bins,
-                                                      num_bins), dtype=int)
-                        first_pass_rec_cont = np.empty((num_bins_on_rank, num_bins,
-                                                        num_bins, 3), dtype=int)
-
-                        self._comm.Recv(num_pass_rec_cont,
-                                        source=rank, tag=rank)
-                        self._comm.Recv(first_pass_rec_cont,
-                                        source=rank, tag=rank + self.mpi_size)
-                        if verbose:
-                            print('root received {}'.format(rank))
-                            
-                        # Change to fancy indexing: num_pass_rec[[bins],...] = ..
-                        num_pass_rec[idxs_on_rank] = num_pass_rec_cont
-                        first_pass_rec[idxs_on_rank] = first_pass_rec_cont
-
-            elif method1:
-                # use mpi allreduce to sum num_pass
-                # and take the min value of first_pass (modified to have no zeros)
-
-                if self.mpi_rank == 0 and verbose:
-                    print('...done, gathering bins from all ranks...')
-
-                first_pass[first_pass == 0] = 16383
-
-                rec_num_pass = np.empty_like(num_pass)
-                rec_first_pass = np.empty_like(num_pass) # note num instead of first
-
-                # pack first pass bitwise
-                # this works because ells are nonnegative and relatively
-                # small
-                first_pass_packed = tools.combine(first_pass[:,:,:,0],
-                                                 first_pass[:,:,:,1],
-                                                 first_pass[:,:,:,2])
-
-                self._comm.Allreduce(num_pass, rec_num_pass, op=MPI.SUM)
-                # also use allreduce but only take minimum value of packed array
-                # works because l1 <= l2 <= l3, so it correctly picks out the
-                # lowest sum tuple (
-                self._comm.Allreduce(first_pass_packed, rec_first_pass,
-                                     op=MPI.MIN)
-                # unpack
-                rec_first_pass = np.stack(tools.unpack(rec_first_pass), axis=3)
-                rec_first_pass[rec_first_pass == 16383] = 0 # is that what i did before?
-
-                self.barrier()
-
-                num_pass = rec_num_pass
-                first_pass = rec_first_pass
-
-            elif method2:
-
-                if self.mpi_rank == 0 and verbose:
-                    print('...done, gathering bins from all ranks...')
-
-                # allocate space to receive arrays on root
-                if self.mpi_rank == 0:
-                    num_pass_rec = np.empty_like(num_pass)
-                    first_pass_rec = np.empty_like(first_pass)
-
-                ### Loop over ranks, root knows bins for each rank
-                ### root receives and puts arrays in bigger array.
-
-                # loop over all non-root ranks
-                for rank in xrange(1, self.mpi_size):
-
-                    # send arrays to root
-                    if self.mpi_rank == rank:
-                        self._comm.Send(num_pass, dest=0, tag=rank)
-                        self._comm.Send(first_pass, dest=0, tag=rank + self.mpi_size)
+                    if verbose:
                         print(self.mpi_rank, 'sent')
 
-                    if self.mpi_rank == 0:
-                        self._comm.Recv(num_pass_rec, source=rank, tag=rank)
-                        self._comm.Recv(first_pass_rec, source=rank,
-                                        tag=rank + self.mpi_size)
+                # Receive the arrays on root.
+                if self.mpi_rank == 0:
+
+                    _, idxs_on_rank = self.get_bins_on_rank(return_idx=True,
+                                                            rank=rank)
+                    num_bins_on_rank = idxs_on_rank.size
+                    # MPI needs contiguous array to receive.
+                    num_pass_rec_cont = np.empty((num_bins_on_rank, num_bins,
+                                                  num_bins), dtype=int)
+                    first_pass_rec_cont = np.empty((num_bins_on_rank, num_bins,
+                                                    num_bins, 3), dtype=int)
+
+                    self._comm.Recv(num_pass_rec_cont,
+                                    source=rank, tag=rank)
+                    self._comm.Recv(first_pass_rec_cont,
+                                    source=rank, tag=rank + self.mpi_size)
+                    if verbose:
                         print('root received {}'.format(rank))
 
-                        # simply add num_pass but only take first pass if lower
-                        num_pass += num_pass_rec
-
-                        sum_root = np.sum(first_pass, axis=3)
-                        sum_rec = np.sum(first_pass_rec, axis=3)
-
-                        mask = sum_root == 0
-                        first_pass[mask,:] = first_pass_rec[mask,:]
-
-                        mask2 = sum_rec < sum_root
-                        # but rec is not zero
-                        mask2 *= sum_rec != 0
-                        first_pass[mask2,:] = first_pass_rec[mask2,:]
-
-                # broadcast full arrays to all ranks
-                num_pass = self.broadcast_array(num_pass)
-                first_pass = self.broadcast_array(first_pass)
+                    # Change to fancy indexing: num_pass_rec[[bins],...] = ..
+                    num_pass_rec[idxs_on_rank] = num_pass_rec_cont
+                    first_pass_rec[idxs_on_rank] = first_pass_rec_cont
 
         else:
             # No mpi.
