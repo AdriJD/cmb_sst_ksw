@@ -2022,6 +2022,103 @@ class Fisher(Template, PreCalc):
 
         return binned_bispec
 
+    def _load_binned_bispec(self, filename):
+        '''
+        Try to load and expand bispectrum.
+
+        Arguments
+        ---------
+        filename : str
+            Filename of bispectrum pkl file.
+
+        Returns
+        -------
+        success : bool
+            Returns False when bispectrum could not be loaded.
+        '''
+        
+        success = True
+
+        if self.mpi_rank == 0:
+
+            path = self.subdirs['precomputed']
+            bispec_file = opj(path, filename)
+
+            try:
+                pkl_file = open(bispec_file, 'rb')
+            except IOError:
+                print('{} not found'.format(bispec_file))
+                success = False
+            else:
+                print('loaded bispectrum from {}'.format(bispec_file))
+                self.bispec = pickle.load(pkl_file)
+                pkl_file.close()
+
+                # Loaded bispectrum is sparse, so expand.
+                b_sparse = self.bispec['bispec']
+                npol = b_sparse.shape[-1]
+                nbins = self.bins['bins'].size
+                mask_full = np.zeros((nbins, nbins, nbins, npol), dtype=bool)
+                mask = self.bins['num_pass_full'].astype(bool)
+                mask_full += mask[:,:,:,np.newaxis]
+                b_full = np.zeros((nbins, nbins, nbins, npol))
+#                print(b_full[mask].shape)
+#                print(b_sparse.shape)
+#                print(b_sparse[mask].shape)
+                      
+#                b_full[mask] += b_sparse
+#                print(b_full.shape)
+#                print(mask.shape)
+                np.putmask(b_full, mask_full, b_sparse)
+                self.bispec['bispec'] = b_full
+                
+        # This lets nonzero ranks know that file is not found.
+        success = self.broadcast(success)
+
+        if success is True:
+            # for now, leave on root. Could broadcast here.
+            pass
+
+        return success
+
+    def _save_binned_bispec(self, filename):
+        '''
+        Save bispectrum.
+
+        Arguments
+        ---------
+        filename : str
+            Filename of bispectrum pkl file (without path).
+
+        Notes
+        -----
+        Only stores the elements of B that are allowed
+        by parity, triangle condition etc. (determined
+        by the nonzero elements of num_pass)
+        '''
+
+        if self.mpi_rank == 0:
+
+            path = self.subdirs['precomputed']
+            bispec_file = opj(path, filename)
+            print('Storing bispec as: {}'.format(bispec_file))
+
+            # Select allowed values.
+            mask = self.bins['num_pass_full'].astype(bool)
+            b_full = self.bispec['bispec']
+            b_sparse = b_full[mask] # Copy.
+
+            # Temporarily replace.
+            self.bispec['bispec'] = b_sparse
+
+            # Store in pickle file.            
+            with open(bispec_file, 'wb') as handle:
+                pickle.dump(self.bispec, handle,
+                            protocol=pickle.HIGHEST_PROTOCOL)
+
+            # Place back.
+            self.bispec['bispec'] = b_full
+
     def get_binned_bispec(self, prim_template, load=True, 
                           radii_sub=None, tag=None):
         '''
@@ -2040,67 +2137,41 @@ class Fisher(Template, PreCalc):
         tag : str, None
             Tag appended to stored/loaded .pkl file as
             bispec_<prim_template>_<tag>.pkl. (default : None)
-
         '''
 
-        path = self.subdirs['precomputed']
+        # We need bins for loading/saving and recomputing.
+        if not self.bins['init_bins']:
+            raise ValueError('bins not initiated')
+            
         if tag is None:
-            bispec_file = opj(path, 'bispec_{}.pkl'.format(prim_template))
+            filename = 'bispec_{}.pkl'.format(prim_template)
         else:
-            bispec_file = opj(path, 'bispec_{}_{}.pkl'.format(
-                prim_template, tag))
+            filename = 'bispec_{}_{}.pkl'.format(prim_template, tag)
+
         recompute = not load
-
+        
         if load:
-            if self.mpi_rank == 0:
-                # Loading and printing on root.
-                try:
-                    pkl_file = open(bispec_file, 'rb')
-                except IOError:
-                    print('{} not found'.format(bispec_file))
-                    recompute = True
-                else:
-                    print('loaded bispectrum from {}'.format(bispec_file))
-                    self.bispec = pickle.load(pkl_file)
-                    pkl_file.close()
-
-            # This lets nonzero ranks know that file is not found.
-            recompute = self.broadcast(recompute)
-
-            if recompute is False:
-                # Succesfully loaded on root, so broadcast.
-                # NOTE do you want to do this?
-                # for now, leave on root.
-                #if self.mpi_rank != 0:
-                #    self.bispec = None
-                #self.bispec = self.broadcast(self.bispec)
-                pass
-
+            success = self._load_binned_bispec(filename)
+            if not success:
+                recompute = True
 
         if recompute:
+
+            # To recompute we also need beta.
+            if not self.beta['init_beta']:
+                raise ValueError('beta not initiated')
+
             if self.mpi_rank == 0:
                 print('Recomputing bispec')
 
-            if not self.bins['init_bins']:
-                raise ValueError('bins not initiated')
-            if not self.beta['init_beta']:
-                raise ValueError('beta not initiated')
-            
             self.init_wig3j()
             self.init_pol_triplets(single_bmode=True)
-            b_bispec = self._compute_binned_bispec(prim_template,
+            bispec = self._compute_binned_bispec(prim_template,
                                                    radii_sub=radii_sub)
-            self.bispec['bispec'] = b_bispec
+            self.bispec['bispec'] = bispec
 
             # Save for next time.
-            if self.mpi_rank == 0:
-
-                print('Storing bispec as: {}'.format(bispec_file))
-
-                # Store in pickle file.
-                with open(bispec_file, 'wb') as handle:
-                    pickle.dump(self.bispec, handle,
-                                protocol=pickle.HIGHEST_PROTOCOL)
+            self._save_binned_bispec(filename)
 
     def get_bins(self, load=True, tag=None, **kwargs):
         '''
@@ -2377,6 +2448,8 @@ class Fisher(Template, PreCalc):
         invcov[:] = bin_invcov[indices,:]
         cov[:] = bin_cov[indices,:]
 
+
+        # this should not be a attribute, just return...
         self.invcov = invcov
         self.cov = cov
         self.bin_cov = bin_cov

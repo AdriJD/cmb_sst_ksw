@@ -40,11 +40,11 @@ def run(prim_template='equilateral', out_dir=None, camb_dir=None, lmin=2, lmax=5
     F = Fisher(out_dir)
 
     F.get_camb_output(**camb_opts)
-    F.get_bins(lmin=lmin, lmax=lmax, load=False,
+    F.get_bins(lmin=lmin, lmax=lmax, load=True,
                 parity='odd', verbose=True)
 
     interp_factor = 1
-    radii_factor = 1
+    radii_factor = 40
     beta_tag = 'r{}_i{}_l{}'.format(radii_factor, interp_factor, lmax)
 
     radii = F.get_updated_radii()
@@ -52,9 +52,20 @@ def run(prim_template='equilateral', out_dir=None, camb_dir=None, lmin=2, lmax=5
 
 
     F.get_beta(func=prim_template, radii=radii, verbose=True, optimize=True,
-               interp_factor=interp_factor, load=False, sparse=True, tag=beta_tag)
+               interp_factor=interp_factor, load=True, sparse=True, tag=beta_tag)
 
-    F.get_binned_bispec('equilateral', load=False)
+    F.get_binned_bispec('equilateral', load=True)
+    if F.mpi_rank == 0:
+        print(F.bispec['bispec'].shape)
+        print(F.bispec['bispec'][F.bispec['bispec'] != 0])
+        print(F.bispec['bispec'][F.bispec['bispec'] != 0].size)
+        print(np.sum(F.bins['num_pass_full'].astype(bool)))
+        print(F.bispec['bispec'][F.bins['num_pass_full'].astype(bool)])
+        print(np.sum(F.bispec['bispec'][~F.bins['num_pass_full'].astype(bool)]))
+        print(F.bispec['bispec'][np.isnan(F.bispec['bispec'])])
+        print(F.bispec['bispec'][np.logical_and(F.bispec['bispec'] == 0,F.bins['num_pass_full'][:,:,:,np.newaxis].astype(bool))])
+        print(F.bispec['bispec'][0,:4,:4,:])
+        print(F.bins['num_pass_full'][0,:4,:4])
 
 if __name__ == '__main__':
 
@@ -69,5 +80,5 @@ if __name__ == '__main__':
     camb_dir = opj(base_dir, '20180911_sst/camb_output/lensed_r0_4000')
     # camb_dir = opj(base_dir, '20171217_sst/camb_output/high_acy/sparse_5000')
 
-    run(out_dir=out_dir, camb_dir=camb_dir, lmax=4000)
+    run(out_dir=out_dir, camb_dir=camb_dir, lmax=400)
 
