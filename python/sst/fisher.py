@@ -700,8 +700,7 @@ class PreCalc(MPIBase):
             Whether or not this function has been run.
         '''
 
-        # ~80 % of time is spend on spher. bessels. You can try
-        # to do cubic interpolation
+        # ~80 % of time is spend on spher. bessels.
 
         if not self.bins['init_bins']:
             raise ValueError('bins not initialized')
@@ -1067,56 +1066,7 @@ class PreCalc(MPIBase):
         if self.mpi_rank == 0 and verbose:
             print('Binning beta')
 
-        bins = self.bins['bins']
-
-        beta_s_f = np.asfortranarray(beta_s)
-        beta_t_f = np.asfortranarray(beta_t)
-
-        b_beta_s_f = np.zeros((bins.size,L_range.size,
-                               ks,len(pols_s),radii.size))
-        b_beta_t_f = np.zeros((bins.size,L_range.size,
-                               ks,len(pols_t),radii.size))
-
-        b_beta_s_f = np.asfortranarray(b_beta_s_f)
-        b_beta_t_f = np.asfortranarray(b_beta_t_f)
-
-        # float array with bins + (lmax + 0.1) for binned_stat
-        # binned_stat output is one less than input bins size
-        bins_ext = np.empty(bins.size + 1, dtype=float)
-        bins_ext[:-1] = bins
-        bins_ext[-1] = self.bins['lmax'] + 0.1
-
-        for pidx, pol in enumerate(pols_t):
-            for kidx in xrange(ks):
-                for ridx, radius in enumerate(radii):
-                    for Lidx, L in enumerate(L_range):
-
-                        if pol != 'B':
-                            # scalar
-                            tmp_beta = beta_s_f[:,Lidx,kidx,pidx,ridx]
-
-                            b_beta_s_f[:,Lidx,kidx,pidx,ridx], _, _ = \
-                                binned_statistic(ells_out, tmp_beta, statistic='mean',
-                                                 bins=bins_ext)
-
-                        # tensor
-                        tmp_beta = beta_t_f[:,Lidx,kidx,pidx,ridx]
-
-                        b_beta_t_f[:,Lidx,kidx,pidx,ridx], _, _ = \
-                            binned_statistic(ells_out, tmp_beta, statistic='mean',
-                                             bins=bins_ext)
-
-        # check for nans
-        if np.any(np.isnan(beta_s)):
-            raise ValueError('nan in beta_s')
-        if np.any(np.isnan(beta_t)):
-            raise ValueError('nan in beta_t')
-
-        beta_s = np.ascontiguousarray(beta_s_f)
-        beta_t = np.ascontiguousarray(beta_t_f)
-
-        b_beta_s = np.ascontiguousarray(b_beta_s_f)
-        b_beta_t = np.ascontiguousarray(b_beta_t_f)
+        b_beta_s, b_beta_t = self._bin_beta(ells_out, beta_s, beta_t)
 
         # Unbinned versions.
         self.beta['beta_s'] = beta_s
@@ -1128,11 +1078,100 @@ class PreCalc(MPIBase):
         self.beta['init_beta'] = True
 
         self.beta['ells'] = ells_out
-        self.beta['bins'] = bins
 
         return
         
-#    def _bin_beta(self, beta_s, beta_t, bins, ells_out, L_range, )
+    def _bin_beta(self, ells, beta_s, beta_t, bins=None):
+        '''
+        Compute mean of beta in bins.
+
+        Arguments
+        ---------
+        ells : array-like
+            multipoles used for beta, must match size first
+            dimension beta_s and beta_t.
+        beta_s : array-like
+            Scalar beta array (shape = (ells, Ls, ks, pols,rs))
+        beta_t : array-like
+            Tensor beta array (shape = (ells, Ls, ks, pols,rs))
+
+        Keyword arguments
+        -----------------
+        bins : array-like, None
+            Lower/left edges of bins, if None, use internal
+            bins. (default : None)
+
+        Returns
+        -----
+        b_beta_s : array-like
+            Binned scalar beta (shape = (bins, Ls, ks, pols,rs)).
+        b_beta_t : array-like
+            Binned tensor beta (shape = (bins, Ls, ks, pols,rs)).
+        '''
+
+        if bins is None:
+            bins = self.bins['bins']
+
+        self.beta['bins'] = bins
+
+        new_shape_s = list(beta_s.shape)
+        new_shape_t = list(beta_t.shape)
+        new_shape_s[0] = len(bins)
+        new_shape_t[0] = len(bins)
+        
+        beta_s_f = np.asfortranarray(beta_s)
+        beta_t_f = np.asfortranarray(beta_t)
+
+        b_beta_s_f = np.zeros(new_shape_s)
+        b_beta_t_f = np.zeros(new_shape_t)
+
+        # This is just done because inner loop is over ell.
+        b_beta_s_f = np.asfortranarray(b_beta_s_f)
+        b_beta_t_f = np.asfortranarray(b_beta_t_f)
+
+        # Float array with bins + (lmax + 0.1) for binned_stat
+        # binned_stat output is one less than input bins size
+        bins_ext = np.empty(len(bins) + 1, dtype=float)
+        bins_ext[:-1] = bins
+        bins_ext[-1] = bins[-1] + 0.1
+        
+        # Use tensor because it has I, E, \emph{and} B.
+        n_Ls, n_ks, n_pols_t, n_radii = new_shape_t[1:] 
+
+        for pidx in xrange(n_pols_t):
+            for kidx in xrange(n_ks):
+                for ridx in xrange(n_radii):
+                    for Lidx in xrange(n_Ls):
+
+                        if pidx != 2: # i.e. not B-mode.
+                            # Scalar.
+                            tmp_beta = beta_s_f[:,Lidx,kidx,pidx,ridx]
+
+                            b_beta_s_f[:,Lidx,kidx,pidx,ridx], _, _ = \
+                                binned_statistic(ells, tmp_beta, statistic='mean',
+                                                 bins=bins_ext)
+
+                        # Tensor
+                        tmp_beta = beta_t_f[:,Lidx,kidx,pidx,ridx]
+
+                        b_beta_t_f[:,Lidx,kidx,pidx,ridx], _, _ = \
+                            binned_statistic(ells, tmp_beta, statistic='mean',
+                                             bins=bins_ext)
+
+        # Check for nans.
+        if np.any(np.isnan(beta_s)):
+            raise ValueError('nan in beta_s')
+        if np.any(np.isnan(beta_t)):
+            raise ValueError('nan in beta_t')
+
+        # Turn back to c-ordered.
+        beta_s = np.ascontiguousarray(beta_s_f)
+        beta_t = np.ascontiguousarray(beta_t_f)
+
+        b_beta_s = np.ascontiguousarray(b_beta_s_f)
+        b_beta_t = np.ascontiguousarray(b_beta_t_f)
+        
+        return b_beta_s, b_beta_t
         
 class Template(object):
     '''

@@ -52,9 +52,9 @@ def run(prim_template='equilateral', out_dir=None, camb_dir=None, lmin=2, lmax=5
 
 
     F.get_beta(func=prim_template, radii=radii, verbose=True, optimize=True,
-               interp_factor=interp_factor, load=True, sparse=True, tag=beta_tag)
+               interp_factor=interp_factor, load=False, sparse=True, tag=beta_tag)
 
-    F.get_binned_bispec('equilateral', load=True)
+    F.get_binned_bispec('equilateral', load=False)
     if F.mpi_rank == 0:
         print(F.bispec['bispec'].shape)
         print(F.bispec['bispec'][F.bispec['bispec'] != 0])
