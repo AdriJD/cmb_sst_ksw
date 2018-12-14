@@ -1946,14 +1946,8 @@ class Fisher(Template, PreCalc):
                 mask = self.bins['num_pass_full'].astype(bool)
                 mask_full += mask[:,:,:,np.newaxis]
                 b_full = np.zeros((nbins, nbins, nbins, npol))
-#                print(b_full[mask].shape)
-#                print(b_sparse.shape)
-#                print(b_sparse[mask].shape)
-                      
-#                b_full[mask] += b_sparse
-#                print(b_full.shape)
-#                print(mask.shape)
-                np.putmask(b_full, mask_full, b_sparse)
+                np.place(b_full, mask_full, b_sparse)
+
                 self.bispec['bispec'] = b_full
                 
         # This lets nonzero ranks know that file is not found.
@@ -2239,27 +2233,37 @@ class Fisher(Template, PreCalc):
                     pickle.dump(self.beta, handle,
                                 protocol=pickle.HIGHEST_PROTOCOL)
 
-    def get_binned_invcov(self, bins=None, ells=None, nls_tot=None):
+    def get_binned_invcov(self, ells, nls, bins=None, return_bin_cov=False):
         '''
         Combine signal and noise into an inverse cov matrix
-        per bin. We first bin, then compute inverse.
+        per bin. We first bin (mean per bin), then compute inverse.
+
+        Arguments
+        ---------
+        ells : array-like
+            Multipoles corresponding to nls.
+        nls : array-like
+            Total covariance Nl, Cl or Nl + Cl. Shape: (6, ells.size)
+            in order: TT, EE, BB, TE, TB, EB
 
         Keyword Arguments
         -----------------
-        bins : array-like
-        ells : array-like
-            lmax >= bins[-1]
-        nls_tot : array-like
-            Total covariance (Cl + Nl). Shape: (6, ells.size) in
-            order: TT, EE, BB, TE, TB, EB
+        bins : array-like, None
+            Left/lower edge of bins, if None, use internal bins.
+            (default : None)
 
-        Notes
-        -----
-        Stores shape = (ells, 3, 3) array. ells is unbinned.
+        Returns
+        -------
+        bin_invcov : array-like
+            Binned inverse covariance, shape = (bins, 3, 3).
+        bin_cov : array-like
+            Binned covariance, shape = (bins, 3, 3), if 
+            return_bin_cov is set.
         '''
 
-        if ells is None:
-            ells = self.bins['ells']
+        if not nls.shape[1] == ells.size:
+            raise ValueError("ells.size = {}, nls.shape[0] = {}".format(
+                ells.size, nls.shape[1]))
 
         if bins is None:
             bins = self.bins['bins']
@@ -2270,30 +2274,10 @@ class Fisher(Template, PreCalc):
         if not ells[-1] >= bins[-1]:
             raise ValueError('lmax smaller than max bin')
 
-        indices = np.digitize(ells, bins, right=False) - 1
+#        indices = np.digitize(ells, bins, right=False) - 1
 
-        lmin = ells[0]
-        lmax = ells[-1]
-
-        if nls_tot is None:
-
-            # get signal and noise from depo
-            # eventually remove this probably
-            cls = self.depo['cls'] # Signal, lmin = 2
-            nls = self.depo['nls'] # Noise
-
-            # to not mess up nls with cls later on
-            nls = nls.copy()
-            cls = cls.copy()
-
-            # assume nls start at lmin, cls at ell=2
-            # NOTE, for new noise, noise also starts at ell=2 ?
-            nls = nls[:,:(lmax - lmin + 1)]
-            cls = cls[:,lmin-2:lmax-1]
-
-            # Add signal cov to noise (cls for TB and TE not present in cls)
-            nls[:4,:] += cls
-            nls = nls_tot
+#        lmin = ells[0]
+#        lmax = ells[-1]
 
         bin_cov = np.ones((bins.size, 3, 3))
         bin_cov *= np.nan
@@ -2303,44 +2287,46 @@ class Fisher(Template, PreCalc):
                     'ET': 3, 'BT': 4, 'TB': 4, 'EB': 5,
                     'BE': 5}
 
-        # float array with bins + (lmax + 0.1) for binned_stat
-        # binned_stat output is one less than input bins size
+        # Float array with bins + (lmax + 0.1) for binned_stat
+        # binned_stat output is one less than input bins size.
         bins_ext = np.empty(bins.size + 1, dtype=float)
         bins_ext[:-1] = bins
-        bins_ext[-1] = lmax + 0.1
+        bmax = bins[-1]
+        bins_ext[-1] = bmax + 0.1
 
         for pidx1, pol1 in enumerate(['T', 'E', 'B']):
             for pidx2, pol2 in enumerate(['T', 'E', 'B']):
 
-                # Cl+Nl array
                 nidx = nls_dict[pol1+pol2]
-                nell = nls_tot[nidx,:]
+                nell = nls[nidx,:]
 
                 # Bin
-                bin_cov[:,pidx1,pidx2], _, _ = binned_statistic(ells, nell,
-                                                             statistic='mean',
-                                                             bins=bins_ext)
+                bin_cov[:,pidx1,pidx2], _, _ = binned_statistic(
+                    ells, nell, statistic='mean', bins=bins_ext)
 
-        # Invert
+        # Invert.
         for bidx in xrange(bins.size):
             bin_invcov[bidx,:,:] = inv(bin_cov[bidx,:,:])
 
-        # Expand binned inverse cov and cov to full size again
-        invcov = np.ones((ells.size, 3, 3))
-        invcov *= np.nan
-        cov = invcov.copy()
-        invcov[:] = bin_invcov[indices,:]
-        cov[:] = bin_cov[indices,:]
+        # Expand binned inverse cov and cov to full size again.
+#        invcov = np.ones((ells.size, 3, 3))
+#        invcov *= np.nan
+#        cov = invcov.copy()
+#        invcov[:] = bin_invcov[indices,:]
+#        cov[:] = bin_cov[indices,:]
 
 
         # this should not be a attribute, just return...
-        self.invcov = invcov
-        self.cov = cov
-        self.bin_cov = bin_cov
-        self.bin_invcov = bin_invcov
-        self.nls = nls_tot
+#        self.invcov = invcov
+#        self.cov = cov
+#        self.bin_cov = bin_cov
+#        self.bin_invcov = bin_invcov
+#        self.nls = nls_tot
 
-        return
+        if return_bin_cov:
+            return bin_invcov, bin_cov
+        else:
+            return bin_invcov
 
     # load_invcov function? Saves dict w/ all invcov stuff with tag..
     # if it finds correct file loads, otherwise recomputes and saves
@@ -2350,34 +2336,35 @@ class Fisher(Template, PreCalc):
     # so load invov gives you fisher dict, then naive_fisher just populates
     # the fisher attribute.
 
-    def naive_fisher(self, lmin, lmax, nls_tot, fsky=1,
-                     bispec=None, bins=None, num_pass=None,
-                     pol_trpl=None):
+    def naive_fisher(self, bin_invcov, lmin=None, lmax=None, fsky=1):
         '''
         Calculate the fisher information by squaring bins.
 
         Arguments
         ---------
-        bispec : array-like
-            Binned bispectrum of shape (nbins, nbins, nbins, npol)
-        bins : array-like
-            Bins. Shape: (nbins)
-        num_pass : array-like
-            Number of allowed ell triplets in bin.
-            Shape: (nbins, nbins, nbins)
-        pol_trpl : array-like
-            Polarization triplets for bispectrum.
-            Shape: (npol, 3)
+        bin_invcov : array-like
+            Binned inverse convariance, shape (bins, 3, 3), 
+            see `get_binned_invcov`.
+        
+        Keyword Arguments
+        -----------------
+        lmin : int
+        lmax : int
+        fsky : float
 
+        Returns
+        -------
+        fisher : float
+            Fisher information.
 
         Notes
         -----
 
         '''
-
-        self.get_binned_invcov(nls_tot=nls_tot)
-        bin_invcov = self.bin_invcov
-        bin_cov = self.bin_cov
+        # add ells for nls!!!
+#        bin_invcov = self.get_binned_invcov(nls=nls_tot)
+#        bin_invcov = self.bin_invcov
+#        bin_cov = self.bin_cov
 
         bin_size = self.bins['bins'].size
         bins = self.bins['bins']
@@ -2385,7 +2372,8 @@ class Fisher(Template, PreCalc):
         bispec = self.bispec['bispec']
 
         # allocate 12 x 12 cov for use in inner loop
-        invcov = np.zeros((self.bispec['pol_trpl'].size, self.bispec['pol_trpl'].size))
+        invcov = np.zeros((self.bispec['pol_trpl'].size,
+                           self.bispec['pol_trpl'].size))
 
         # create (binned) inverse cov matrix for each ell
         # i.e. use the fact that 12x12 pol invcov can be factored

@@ -9,7 +9,13 @@ class TestTools(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        pass
+        '''
+        Create subdir for test data.
+        '''
+        cls.test_dir = os.path.abspath(opj(os.path.dirname(__file__),
+                                            'test_data'))
+        if not os.path.exists(cls.test_dir):
+            os.makedirs(cls.test_dir)
 
     @classmethod
     def tearDownClass(cls):
@@ -22,7 +28,8 @@ class TestTools(unittest.TestCase):
 
     def loop_over_bins(self, lmin, lmax, parity, bins):
 
-        F = Fisher('.')
+        # make aux directory where this works
+        F = Fisher(self.test_dir)
 
         F.init_bins(lmin=lmin, lmax=lmax, parity=parity, bins=bins)
 
@@ -79,11 +86,13 @@ class TestTools(unittest.TestCase):
                             assert ell3 <= (ell1 + ell2)
 
                     except:
-                        print 'error in bin:'
-                        print 'bin_idx: ({},{},{}), bin: ({},{},{}), no. gd_tuples: {}, '\
-                            'u_ell: ({},{},{})'.format(i1, i2, i3, b1, b2, b3, 
-                                                       F.bins['num_pass'][i1,i2,i3], 
-                                                       ell1, ell2, ell3)
+                        print('error in bin:')
+                        print('bin_idx: ({},{},{}), '
+                              'bin: ({},{},{}), no. gd_tuples: {}, '\
+                              'u_ell: ({},{},{})'.format(
+                                  i1, i2, i3, b1, b2, b3, 
+                                  F.bins['num_pass'][i1,i2,i3], 
+                                  ell1, ell2, ell3))
                         raise
                 
     def test_bins(self):
@@ -91,13 +100,16 @@ class TestTools(unittest.TestCase):
         lmin = 2
         lmax = 40
         for parity in ['even', 'odd', None]:
-            self.loop_over_bins(lmin=lmin, lmax=lmax, parity=parity, bins=None)
-            self.loop_over_bins(lmin=None, lmax=lmax, parity=parity, bins=[2,3,4,10,lmax])
-            self.loop_over_bins(lmin=None, lmax=lmax, parity=parity, bins=[2,3,4,10,lmax+12])
+            self.loop_over_bins(lmin=lmin, lmax=lmax, parity=parity, 
+                                bins=None)
+            self.loop_over_bins(lmin=None, lmax=lmax, parity=parity, 
+                                bins=[2,3,4,10,lmax])
+            self.loop_over_bins(lmin=None, lmax=lmax, parity=parity, 
+                                bins=[2,3,4,10,lmax+12])
 
     def test_first_num_pass(self):
         
-        F = Fisher('.')
+        F = Fisher(self.test_dir)
         F.init_bins(lmin=10, lmax=30, parity='odd')
 
         n_gd_bins = np.sum(F.bins['num_pass_full'].astype(bool))
@@ -107,3 +119,29 @@ class TestTools(unittest.TestCase):
 
         passed_trpl = F.bins['first_pass_full'][F.bins['num_pass_full'].astype(bool)]
         assert n_gd_bins == np.sum(passed_trpl.astype(bool)) / 3.
+
+    def test_save_load_bispectrum(self):
+        
+        lmin = 4
+        lmax = 10
+        bins = [4, 5, 6, 8, 10]
+        parity = 'odd'
+        F = Fisher(self.test_dir)
+        F.init_bins(lmin=lmin, lmax=lmax, parity=parity, bins=bins)
+        b_shape = (len(bins), len(bins), len(bins), 12)
+        test_bispec = np.arange(len(bins)**3 * 12, dtype=float).reshape(b_shape)
+
+        # set forbidden ell triplets to zero in the most stupid way.
+        num_pass_bool = F.bins['num_pass_full'].astype(bool)
+        for i1 in xrange(len(bins)):
+            for i2 in xrange(len(bins)):
+                for i3 in xrange(len(bins)):
+                    if num_pass_bool[i1,i2,i3] == False:
+                        test_bispec[i1,i2,i3,:] *= 0                        
+
+        F.bispec['bispec'] = test_bispec.copy()
+        F._save_binned_bispec('test_bispec.pkl')
+        F._load_binned_bispec('test_bispec.pkl')
+
+        np.testing.assert_almost_equal(test_bispec, F.bispec['bispec'])
+

@@ -194,7 +194,7 @@ def get_totcov(cls, nls, no_ee=False, no_tt=False):
 
     return totcov
 
-def run_fisher(template, ana_dir, camb_dir, totcov, lmin=2, lmax=4999,fsky=0.03, 
+def run_fisher(template, ana_dir, camb_dir, totcov, ells, lmin=2, lmax=4999,fsky=0.03, 
                plot_tag='', tag=None):
     
     F = Fisher(ana_dir)
@@ -206,16 +206,35 @@ def run_fisher(template, ana_dir, camb_dir, totcov, lmin=2, lmax=4999,fsky=0.03,
     F.get_camb_output(**camb_opts)
     radii = F.get_updated_radii()
     radii = radii[::2]
-    F.get_bins(lmin=lmin, lmax=lmax, load=True, verbose=False, parity='odd', tag=tag)
+    F.get_bins(lmin=lmin, lmax=lmax, load=True, verbose=False, 
+               parity='odd', tag=tag+'_new')
  #   F.get_beta(func='equilateral', load=True, verbose=False, radii=radii, tag=tag)
-    F.get_beta(func='local', load=True, verbose=False, radii=radii, tag=tag+'_w_ns')
+    F.get_beta(func='equilateral', load=True, verbose=True, radii=radii, tag=tag+'_new',
+               interp_factor=10)
 #    F.get_binned_bispec(template, load=True, tag=tag)
-    F.get_binned_bispec(template, load=True, tag=tag+'_w_ns') 
+    F.get_binned_bispec(template, load=True, tag=tag+'_new') 
+    bin_invcov, bin_cov = F.get_binned_invcov(ells, totcov, return_bin_cov=True)
+
+    # Plot invcov, cov
+    plot_opts = dict(lmin=2)
+    bins = F.bins['bins']
+    plot_tools.cls_matrix(plot_tag, bins, bin_invcov, log=False, plot_dell=False,
+                          inv=True, **plot_opts)
+    plot_tools.cls_matrix(plot_tag.replace('invcov', 'cov_dell'),
+                          bins, bin_cov, log=False, plot_dell=True,
+                          **plot_opts)
+    print(lmin, lmax)
+    fisher = F.naive_fisher(bin_invcov, lmin=lmin, lmax=lmax, fsky=fsky)
+    sigma = 1/np.sqrt(fisher)
+    
+    return fisher, sigma
+
+    ###### OLD
 
     amp = get_prim_amp(template)
     F.bispec['bispec'] *= amp
 
-    F.get_binned_invcov(nls_tot=totcov)
+    F.get_binned_invcov(nls=totcov)
     bin_invcov = F.bin_invcov
     bin_cov = F.bin_cov
 
@@ -339,7 +358,8 @@ def run_fisher(template, ana_dir, camb_dir, totcov, lmin=2, lmax=4999,fsky=0.03,
 if __name__ == '__main__':
 
 #    ana_dir = '/mn/stornext/d8/ITA/spider/adri/analysis/20181112_sst/' # S5
-    ana_dir = '/mn/stornext/d8/ITA/spider/adri/analysis/20181123_sst/'
+#    ana_dir = '/mn/stornext/d8/ITA/spider/adri/analysis/20181123_sst/'
+    ana_dir = '/mn/stornext/d8/ITA/spider/adri/analysis/20181214_sst_debug/'
     out_dir = opj(ana_dir, 'fisher')
     camb_base = '/mn/stornext/d8/ITA/spider/adri/analysis/20171217_sst'
     camb_dir = opj(camb_base, 'camb_output/high_acy/sparse_5000')
@@ -379,7 +399,8 @@ if __name__ == '__main__':
     opts['no_ee_cv_lim'] = dict(fsky=1., no_ee=True, no_tt=False, no_noise=True)
     opts['no_tt_cv_lim'] = dict(fsky=1., no_ee=False, no_tt=True, no_noise=True)
 
-    for template in ['local', 'equilateral']:            
+#    for template in ['local', 'equilateral']:            
+    for template in ['local']:            
 #        with open(opj(out_dir, 'fisher_{}.txt'.format(template)), 'w') as text_file:
         with open(opj(out_dir, 'fisher_so_{}.txt'.format(template)), 'w') as text_file:
 
@@ -392,11 +413,12 @@ if __name__ == '__main__':
                 no_tt = opt.get('no_tt')
 
                 cls = get_cls(camb_dir, lmax, A_lens=A_lens)
-                nls = get_nls(lat_path, lmax, sac_path=sac_path)
+                nls = get_nls(lat_path, lmax, sac_path=sac_path)                
                 #nls = get_fiducial_nls(noise_amp_temp, noise_amp_pol, lmax)
                 if no_noise:
                     nls *= 0.
                 totcov = get_totcov(cls, nls, no_ee=no_ee, no_tt=no_tt)
+                ells = np.arange(2, lmax+1)
 
 #                plot_name = opj(out_dir, 'b_invcov_{}.png'.format(key))
                 plot_name = opj(out_dir, 'b_so_invcov_{}.png'.format(key))
@@ -412,9 +434,9 @@ if __name__ == '__main__':
                 text_file.write('no_tt: {}\n'.format(no_tt))
 
                 fisher_check, sigma = run_fisher(template, 
-                                                 ana_dir, camb_dir, totcov, 
+                                                 ana_dir, camb_dir, totcov, ells,
                                                  lmin=lmin_f, lmax=lmax_f, fsky=fsky, 
-                                                 plot_tag=plot_name, tag='r1_i40_l4000')
+                                                 plot_tag=plot_name, tag='r1_i10')
 
                 text_file.write('fisher: {}\n'.format(fisher_check))
                 text_file.write('sigma: {}\n'.format(sigma))

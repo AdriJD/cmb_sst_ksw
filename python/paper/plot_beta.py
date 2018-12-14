@@ -19,7 +19,7 @@ class ScalarFormatterForceFormat(ScalarFormatter):
     def _set_format(self):
         self.format = '%1d'
 
-def plot_alpha_beta(beta_dir, img_dir, beta_tag=None):
+def plot_alpha_beta(beta_dir, img_dir, ell, beta_tag=None):
     '''
     Keyword arguments
     -----------------
@@ -41,12 +41,12 @@ def plot_alpha_beta(beta_dir, img_dir, beta_tag=None):
     beta_t = beta['beta_t']
     radii = beta['radii']
 
-    lidx = 2
+    lidx = ell - 2
 
     ridx = radii.size - 1
     lmax = beta_s.shape[0] + 1
-    ell = np.arange(2, lmax+1)
-    dell = ell * (ell + 1) / 2. / np.pi
+    ells = np.arange(2, lmax+1)
+    dell = ells * (ells + 1) / 2. / np.pi
 
     ridxs = np.arange(0, radii.size, 10)
     grays = np.linspace(0, 0.7, num=ridxs.size)
@@ -179,9 +179,9 @@ def plot_alpha_beta(beta_dir, img_dir, beta_tag=None):
         for Lidx in [2]:
             for ii, ridx in enumerate(ridxs):
                 if pidx != 2:
-                    axs[0].plot(ell, dell * beta_s[:,Lidx,0,pidx,ridx],
+                    axs[0].plot(ells, dell * beta_s[:,Lidx,0,pidx,ridx],
                                 color=str(grays[ii]))
-                axs[1].plot(ell, dell * beta_t[:,Lidx,0,pidx,ridx],
+                axs[1].plot(ells, dell * beta_t[:,Lidx,0,pidx,ridx],
                             color=str(grays[ii]))
         axs[0].set_xlabel(r'Multipole [$\ell$]')
         axs[1].set_xlabel(r'Multipole [$\ell$]')
@@ -196,9 +196,9 @@ def plot_alpha_beta(beta_dir, img_dir, beta_tag=None):
         for Lidx in [2]:
             for ii, ridx in enumerate(ridxs):
                 if pidx != 2:                        
-                    axs[0].plot(ell, dell * beta_s[:,Lidx,1,pidx,ridx],
+                    axs[0].plot(ells, dell * beta_s[:,Lidx,1,pidx,ridx],
                                 color=str(grays[ii]))
-                axs[1].plot(ell, dell * beta_t[:,Lidx,1,pidx,ridx],
+                axs[1].plot(ells, dell * beta_t[:,Lidx,1,pidx,ridx],
                             color=str(grays[ii]))
         axs[0].set_xlabel(r'Multipole [$\ell$]')
         axs[1].set_xlabel(r'Multipole [$\ell$]')
@@ -399,10 +399,12 @@ if __name__ == '__main__':
 
 #    beta_dir = opj(base_dir, '20180911_sst/beta/equilateral')
 #    beta_dir = opj(base_dir, '20180911_sst/beta_sparse_ell/equilateral')
-    beta_dir = opj(base_dir, '20181123_sst/precomputed')
-    img_dir = opj(base_dir, '20181123_sst/img/beta/')
+#    beta_dir = opj(base_dir, '20181123_sst/precomputed')
+#    img_dir = opj(base_dir, '20181123_sst/img/beta/')
+    beta_dir = opj(base_dir, '20181214_sst_debug/precomputed')
+    img_dir = opj(base_dir, '20181214_sst_debug/img/beta/')
 
-#    plot_alpha_beta(beta_dir, img_dir, beta_tag='r1_i40_l4000')
+    plot_alpha_beta(beta_dir, img_dir, 20, beta_tag='r5_i1_l400')
     # plot_alpha_beta_matrix(beta_dir, img_dir)
 #    alpha_at_r(13306.4, beta_tag='r1_i40_l4000')
-    alpha_at_ell(2500, beta_tag='r1_i40_l4000')
+    alpha_at_ell(20, beta_tag='r5_i1_l400')

@@ -44,7 +44,7 @@ def run(prim_template='equilateral', out_dir=None, camb_dir=None, lmin=2, lmax=5
                 parity='odd', verbose=True)
 
     interp_factor = 1
-    radii_factor = 40
+    radii_factor = 5
     beta_tag = 'r{}_i{}_l{}'.format(radii_factor, interp_factor, lmax)
 
     radii = F.get_updated_radii()
@@ -53,7 +53,7 @@ def run(prim_template='equilateral', out_dir=None, camb_dir=None, lmin=2, lmax=5
 
     F.get_beta(func=prim_template, radii=radii, verbose=True, optimize=True,
                interp_factor=interp_factor, load=False, sparse=True, tag=beta_tag)
-
+    exit()
     F.get_binned_bispec('equilateral', load=False)
     if F.mpi_rank == 0:
         print(F.bispec['bispec'].shape)
@@ -73,7 +73,9 @@ if __name__ == '__main__':
 
     # out_dir = opj(base_dir, '20180911_sst/beta')
     # out_dir = opj(base_dir, '20180911_sst/beta_sparse_ell')
-    out_dir = opj(base_dir, '20181123_sst')
+#    out_dir = opj(base_dir, '20181123_sst')
+    out_dir = opj(base_dir, '20181214_sst_debug')
+
     # camb_dir = opj(base_dir, '20171217_sst/camb_output/high_acy/sparse_5000')
     # camb_dir = opj(base_dir, '20171217_sst/camb_output/high_acy/nolens_4000')
     # camb_dir = opj(base_dir, '20171217_sst/camb_output/high_acy/nolens_5200')
