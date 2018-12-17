@@ -207,12 +207,12 @@ def run_fisher(template, ana_dir, camb_dir, totcov, ells, lmin=2, lmax=4999,fsky
     radii = F.get_updated_radii()
     radii = radii[::2]
     F.get_bins(lmin=lmin, lmax=lmax, load=True, verbose=False, 
-               parity='odd', tag=tag+'_new')
+               parity='odd', tag=tag)
  #   F.get_beta(func='equilateral', load=True, verbose=False, radii=radii, tag=tag)
-    F.get_beta(func='equilateral', load=True, verbose=True, radii=radii, tag=tag+'_new',
+    F.get_beta(func='equilateral', load=True, verbose=True, radii=radii, tag=tag,
                interp_factor=10)
 #    F.get_binned_bispec(template, load=True, tag=tag)
-    F.get_binned_bispec(template, load=True, tag=tag+'_new') 
+    F.get_binned_bispec(template, load=True, tag=tag) 
     bin_invcov, bin_cov = F.get_binned_invcov(ells, totcov, return_bin_cov=True)
 
     # Plot invcov, cov
@@ -436,7 +436,7 @@ if __name__ == '__main__':
                 fisher_check, sigma = run_fisher(template, 
                                                  ana_dir, camb_dir, totcov, ells,
                                                  lmin=lmin_f, lmax=lmax_f, fsky=fsky, 
-                                                 plot_tag=plot_name, tag='r1_i10')
+                                                 plot_tag=plot_name, tag='r1_i10_b4')
 
                 text_file.write('fisher: {}\n'.format(fisher_check))
                 text_file.write('sigma: {}\n'.format(sigma))

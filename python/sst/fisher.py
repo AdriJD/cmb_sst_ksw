@@ -316,12 +316,12 @@ class PreCalc(MPIBase):
         bins : array-like
             Left/lower side of bins from ell=2 to ell=1e4.
         '''
-
+        f = 1
         bins_0 = np.arange(2, 51, 1)
-        bins_1a = np.arange(54, 204, 4)
-        bins_1b = np.arange(212, 512, 12)
-        bins_2 = np.arange(524, 2024, 24)
-        bins_3 = np.arange(2040, 10000, 40)
+        bins_1a = np.arange(54, 204, int(4 * f))
+        bins_1b = np.arange(212, 512, int(12 * f))
+        bins_2 = np.arange(524, 2024, int(24 * f))
+        bins_3 = np.arange(2040, 10000, int(40 * f))
 
         bins = np.concatenate((bins_0, bins_1a, bins_1b,
                                bins_2, bins_3))
@@ -2232,10 +2232,61 @@ class Fisher(Template, PreCalc):
                 with open(beta_file, 'wb') as handle:
                     pickle.dump(self.beta, handle,
                                 protocol=pickle.HIGHEST_PROTOCOL)
+                
+    def get_invcov(self, ells, nls, return_cov=False):
+        '''
+        Combine covariance into an inverse cov matrix.
+
+        Arguments
+        ---------
+        ells : array-like
+            Multipoles corresponding to nls.
+        nls : array-like
+            Total covariance Nl, Cl or Nl + Cl. Shape: (6, ells.size)
+            in order: TT, EE, BB, TE, TB, EB
+
+        Returns
+        -------
+        bin_invcov : array-like
+            Binned inverse covariance, shape = (bins, 3, 3).
+        bin_cov : array-like
+            Binned covariance, shape = (bins, 3, 3), if 
+            return_bin_cov is set.
+        '''
+        
+        if not nls.shape[1] == ells.size:
+            raise ValueError("ells.size = {}, nls.shape[0] = {}".format(
+                ells.size, nls.shape[1]))
+
+        nls_dict = {'TT': 0, 'EE': 1, 'BB': 2, 'TE': 3,
+                    'ET': 3, 'BT': 4, 'TB': 4, 'EB': 5,
+                    'BE': 5}
+
+        cov = np.ones((ells.size, 3, 3))
+        cov *= np.nan
+        invcov = bin_cov.copy()
+
+        for pidx1, pol1 in enumerate(['T', 'E', 'B']):
+            for pidx2, pol2 in enumerate(['T', 'E', 'B']):
+
+                nidx = nls_dict[pol1+pol2]
+                nell = nls[nidx,:]
+
+                # Bin
+                cov[:,pidx1,pidx2] = nell
+
+        # Invert.
+        for lidx in xrange(ells.size):
+            bin_invcov[lidx,:,:] = inv(cov[lidx,:,:])
+
+        if return_cov:
+            return invcov, cov
+        else:
+            return invcov
 
     def get_binned_invcov(self, ells, nls, bins=None, return_bin_cov=False):
         '''
-        Combine signal and noise into an inverse cov matrix
+        Combine covariance into an inverse cov matrix
         per bin. We first bin (mean per bin), then compute inverse.
 
         Arguments
@@ -2274,11 +2325,6 @@ class Fisher(Template, PreCalc):
         if not ells[-1] >= bins[-1]:
             raise ValueError('lmax smaller than max bin')
 
-#        indices = np.digitize(ells, bins, right=False) - 1
-
-#        lmin = ells[0]
-#        lmax = ells[-1]
-
         bin_cov = np.ones((bins.size, 3, 3))
         bin_cov *= np.nan
         bin_invcov = bin_cov.copy()
@@ -2308,21 +2354,6 @@ class Fisher(Template, PreCalc):
         for bidx in xrange(bins.size):
             bin_invcov[bidx,:,:] = inv(bin_cov[bidx,:,:])
 
-        # Expand binned inverse cov and cov to full size again.
-#        invcov = np.ones((ells.size, 3, 3))
-#        invcov *= np.nan
-#        cov = invcov.copy()
-#        invcov[:] = bin_invcov[indices,:]
-#        cov[:] = bin_cov[indices,:]
-
-
-        # this should not be a attribute, just return...
-#        self.invcov = invcov
-#        self.cov = cov
-#        self.bin_cov = bin_cov
-#        self.bin_invcov = bin_invcov
-#        self.nls = nls_tot
-
         if return_bin_cov:
             return bin_invcov, bin_cov
         else:
@@ -2336,6 +2367,55 @@ class Fisher(Template, PreCalc):
     # so load invov gives you fisher dict, then naive_fisher just populates
     # the fisher attribute.
 
+    def _init_fisher_invcov(self, invcov):
+        '''
+        Given 3 x 3 covariance per multipole (or bin) return
+        three (C^{-1})^XY arrays.
+
+        Arguments
+        ---------
+        invcov : array-like
+            Inverse covariance per ell (bin). Shape = (N, 3, 3).
+        
+        Returns
+        -------
+        invcov1, invcov2, invcov3 : array-like
+            (C^{-1})^XY arrays. Shape = (N, npt, npt), where npt
+            is the number of polarization triplets used for the 
+            bispectrum (see `init_pol_triplets`).
+        '''
+
+        nptr = self.bispec['pol_trpl'].shape[0]
+        N = invcov.shape[0] # Number of multipoles (or bins).
+
+        # Example: for single B-mode: nptr = 12 (BTT, BEE, BET, BTE etc.)
+        # Use the fact that 12x12 pol invcov can be factored
+        # as (Cl-1)_l1^ip (Cl-1)_l2^jq (Cl-1)_l3^kr 
+        invcov1 = np.ones((N, nptr, nptr)) 
+        invcov2 = np.ones((N, nptr, nptr))
+        invcov3 = np.ones((N, nptr, nptr))
+
+        for tidx_a, tr_a in enumerate(self.bispec['pol_trpl']):
+            # tr_a = ijk
+            for tidx_b, tr_b in enumerate(self.bispec['pol_trpl']):
+                # tr_a = pqr
+                # a is first bispectrum, b second one.
+                # tr = pol triplet
+
+                tr_a1 = tr_a[0]
+                tr_a2 = tr_a[1]
+                tr_a3 = tr_a[2]
+
+                tr_b1 = tr_b[0]
+                tr_b2 = tr_b[1]
+                tr_b3 = tr_b[2]
+
+                invcov1[:,tidx_a,tidx_b] = invcov[:,tr_a1,tr_b1]
+                invcov2[:,tidx_a,tidx_b] = invcov[:,tr_a2,tr_b2]
+                invcov3[:,tidx_a,tidx_b] = invcov[:,tr_a3,tr_b3]
+
+        return invcov1, invcov2, invcov3
+
     def naive_fisher(self, bin_invcov, lmin=None, lmax=None, fsky=1):
         '''
         Calculate the fisher information by squaring bins.
@@ -2348,60 +2428,34 @@ class Fisher(Template, PreCalc):
         
         Keyword Arguments
         -----------------
-        lmin : int
-        lmax : int
+        lmin : int, None
+            Lower limit of Fisher loop. If None,
+            use first bin. (default : None)
+        lmax : int, None
+            Upper limit of Fisher loop. If None,
+            use last bin. (default : None)
         fsky : float
+            Fraction of sky assumed to be used.
+            (default : 1)
 
         Returns
         -------
         fisher : float
             Fisher information.
-
-        Notes
-        -----
-
         '''
-        # add ells for nls!!!
-#        bin_invcov = self.get_binned_invcov(nls=nls_tot)
-#        bin_invcov = self.bin_invcov
-#        bin_cov = self.bin_cov
 
         bin_size = self.bins['bins'].size
         bins = self.bins['bins']
         num_pass = self.bins['num_pass_full']
         bispec = self.bispec['bispec']
 
-        # allocate 12 x 12 cov for use in inner loop
-        invcov = np.zeros((self.bispec['pol_trpl'].size,
-                           self.bispec['pol_trpl'].size))
-
-        # create (binned) inverse cov matrix for each ell
-        # i.e. use the fact that 12x12 pol invcov can be factored
-        # as (Cl-1)_l1^ip (Cl-1)_l2^jq (Cl-1)_l3^kr 
-        invcov1 = np.ones((bin_size, 12, 12))
-        invcov2 = np.ones((bin_size, 12, 12))
-        invcov3 = np.ones((bin_size, 12, 12))
+        invcov1, invcov2, invcov3 = self._init_fisher_invcov(bin_invcov)
 
         fisher = 0
 
-        for tidx_a, ptrp_a in enumerate(self.bispec['pol_trpl']):
-            # ptrp_a = ijk
-            for tidx_b, ptrp_b in enumerate(self.bispec['pol_trpl']):
-                # ptrp_a = pqr
-                # a is first bispectrum, b second one
-                # ptrp = pol triplet
-
-                ptrp_a1 = ptrp_a[0]
-                ptrp_a2 = ptrp_a[1]
-                ptrp_a3 = ptrp_a[2]
-
-                ptrp_b1 = ptrp_b[0]
-                ptrp_b2 = ptrp_b[1]
-                ptrp_b3 = ptrp_b[2]
-
-                invcov1[:,tidx_a,tidx_b] = bin_invcov[:,ptrp_a1,ptrp_b1]
-                invcov2[:,tidx_a,tidx_b] = bin_invcov[:,ptrp_a2,ptrp_b2]
-                invcov3[:,tidx_a,tidx_b] = bin_invcov[:,ptrp_a3,ptrp_b3]
+        # allocate 12 x 12 cov for use in inner loop
+        nptr = self.bispec['pol_trpl'].shape[0]
+        cl123 = np.zeros((nptr, nptr), dtype=float)
 
         # Depending on lmin, start outer loop not at first bin.
         start_bidx = np.where(bins >= lmin)[0][0]
@@ -2411,12 +2465,11 @@ class Fisher(Template, PreCalc):
         # loop same loop as in binned_bispectrum
         for idx1, i1 in enumerate(bins[start_bidx:end_bidx]):
             idx1 += start_bidx
-            cl1 = invcov1[idx1,:,:] # 12x12
-
+            cl1 = invcov1[idx1,:,:] # nptr x nptr matrix.
 
             for idx2, i2 in enumerate(bins[idx1:end_bidx]):
                 idx2 += idx1
-                cl2 = invcov2[idx1,:,:] # 12x12
+                cl2 = invcov2[idx1,:,:] # nptr x nptr matrix.
 
                 cl12 = cl1 * cl2
 
@@ -2427,7 +2480,8 @@ class Fisher(Template, PreCalc):
                     if num == 0:
                         continue
 
-                    cl123 = cl12 * invcov3[idx3,:,:] #12x12
+                    cl123[:] = cl12 # Copy.
+                    cl123 *= invcov3[idx3,:,:] # nptr x nptr matrix.
 
                     B = bispec[idx1,idx2,idx3,:]
 
@@ -2449,14 +2503,134 @@ class Fisher(Template, PreCalc):
         fisher *= fsky
         fisher *= self.common_amp ** 2 # (16 pi^4 As^2)^2
 
-#        fisher_check = f_check * (4*np.pi / np.sqrt(8))**2
-#        sigma = 1/np.sqrt(f_check) * (np.sqrt(8)/4./np.pi)
-
         return fisher
     
-    def interp_fisher(self):
+    def interp_fisher(self, invcov, ells, lmin=None, lmax=None,
+                      fsky=1):
+        '''
+        Calculate Fisher informatoin by interpolating 
+        bispectra before squaring.
+
+        Arguments
+        ---------
+        invcov : array-like
+            Inverse convariance, shape (ells, 3, 3), 
+            see `get_invcov`.
+        ells : array-like
+            Multipoles corresponding to invcov.
+        
+        Keyword Arguments
+        -----------------
+        lmin : int, None
+            Lower limit of Fisher loop. If None,
+            use first bin. (default : None)
+        lmax : int, None
+            Upper limit of Fisher loop. If None,
+            use last bin. (default : None)
+        fsky : float
+            Fraction of sky assumed to be used.
+            (default : 1)
+
+        Returns
+        -------
+        fisher : float
+            Fisher information.        
         '''
 
-        '''
+        bin_size = self.bins['bins'].size
+        bins = self.bins['bins']
+        num_pass = self.bins['num_pass_full']
+        bispec = self.bispec['bispec']
+
+        # Check input.
+        if ells.size != invcov.shape[0]:
+            raise ValueError(
+             'ells.size = {}, invcov.shape = {} not compatible'.format(
+                 ells.size, invcov.shape))
+
+        if lmin is None:
+            lmin = bins[0]
+        if lmax is None:
+            lmax = bins[-1]
+
+        # Check if we have inv. covariance for ells in requested range.
+        if lmin < ells[0]:
+            raise ValueError('lmin = {} < ells[0] = {}'.format(
+                lmin, ells[0]))
+        if lmax > ells[-1]:
+            raise ValueError('lmax = {} > ells[-1] = {}'.format(
+                lmax, ells[-1]))
+
+        invcov1, invcov2, invcov3 = self._init_fisher_invcov(invcov)
+
+
+        #####
+
+        ## outer loop ##
+        ## pick start and end of bin
+        ## use num_pass to get nonzero elements in B for outer bin
+        ## create big empty array
+        ## loop over ells in outer bin and populte empty array with 
+        ## all valid tuples
+        ## use that (truncated) array and earlier array in griddata
+        ## repeat for each polidx
+        ## loop over result and do inverse cov for each item
+        ## prob put if B[idx] = 0 skip.
+        ## that's it I think.
+
+
+        fisher = 0
+
+        # allocate 12 x 12 cov for use in inner loop
+        nptr = self.bispec['pol_trpl'].shape[0]
+        cl123 = np.zeros((nptr, nptr), dtype=float)
+
+        # Depending on lmin, start outer loop not at first bin.
+        start_bidx = np.where(bins >= lmin)[0][0]
+        # Depending on lmax, possibly end loops earlier.
+        end_bidx = np.where(bins >= min(lmax, bins[-1]))[0][0] + 1
+
+        # loop same loop as in binned_bispectrum
+        for idx1, i1 in enumerate(bins[start_bidx:end_bidx]):
+            idx1 += start_bidx
+            cl1 = invcov1[idx1,:,:] # nptr x nptr matrix.
+
+            for idx2, i2 in enumerate(bins[idx1:end_bidx]):
+                idx2 += idx1
+                cl2 = invcov2[idx1,:,:] # nptr x nptr matrix.
+
+                cl12 = cl1 * cl2
+
+                for idx3, i3 in enumerate(bins[idx2:end_bidx]):
+                    idx3 += idx2
+
+                    num = num_pass[idx1,idx2,idx3]
+                    if num == 0:
+                        continue
+
+                    cl123[:] = cl12 # Copy.
+                    cl123 *= invcov3[idx3,:,:] # nptr x nptr matrix.
+
+                    B = bispec[idx1,idx2,idx3,:]
+
+                    f = np.einsum("i,ij,j", B, cl123, B)
+
+                    # both B's have num 
+                    f /= float(num)
+
+                    # Delta_l1l2l3.
+                    if i1 == i2 == i3:
+                        f /= 6.
+                    elif i1 != i2 != i3:
+                        pass
+                    else:
+                        f /= 2.
+
+                    fisher += f
+
+        fisher *= fsky
+        fisher *= self.common_amp ** 2 # (16 pi^4 As^2)^2
+
+        return fisher
 
 

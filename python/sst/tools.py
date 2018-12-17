@@ -243,4 +243,15 @@ def init_bins_numpy(bins, idxs_on_rank, num_pass, first_pass, pmod):
 
                         num_pass[idx1,idx2_full,idx3_full] += n_pass
 
-
+    @jit(nopython=True)
+    def contract_bcb(B, C):
+        '''
+        Calculate B^T C B.
+        
+        Arguments
+        ---------
+        B : array-like
+        C : array-like
+        '''
+        
+        return np.dot(B, np.dot(C, B))
