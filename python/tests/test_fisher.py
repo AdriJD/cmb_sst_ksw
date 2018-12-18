@@ -21,11 +21,6 @@ class TestTools(unittest.TestCase):
     def tearDownClass(cls):
         pass
 
-    def test_init(self):
-        '''Test whether the class instance is initiated correctly. '''
-
-        pass
-
     def loop_over_bins(self, lmin, lmax, parity, bins):
 
         # make aux directory where this works
@@ -97,15 +92,15 @@ class TestTools(unittest.TestCase):
                 
     def test_bins(self):
 
-        lmin = 2
-        lmax = 40
+        lmin = 4
+        lmax = 9
         for parity in ['even', 'odd', None]:
             self.loop_over_bins(lmin=lmin, lmax=lmax, parity=parity, 
                                 bins=None)
             self.loop_over_bins(lmin=None, lmax=lmax, parity=parity, 
-                                bins=[2,3,4,10,lmax])
+                                bins=[2,3,4,8,lmax])
             self.loop_over_bins(lmin=None, lmax=lmax, parity=parity, 
-                                bins=[2,3,4,10,lmax+12])
+                                bins=[2,3,4,8,lmax+12])
 
     def test_first_num_pass(self):
         

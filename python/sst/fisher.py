@@ -2541,6 +2541,8 @@ class Fisher(Template, PreCalc):
         bins = self.bins['bins']
         num_pass = self.bins['num_pass_full']
         bispec = self.bispec['bispec']
+        parity = self.bins['parity']
+        nptr = self.bispec['pol_trpl'].shape[0]
 
         # Check input.
         if ells.size != invcov.shape[0]:
@@ -2563,13 +2565,42 @@ class Fisher(Template, PreCalc):
 
         invcov1, invcov2, invcov3 = self._init_fisher_invcov(invcov)
 
+        # Decide size of allocated arrays.
+        ells_fisher = np.arange(2, lmax + 1)
+        sizes_bispec = tools.estimate_num_gd_tuples(ells_fisher, lmax)        
+        max_bsize = sizes_bispec.max()
 
-        #####
+        if parity == 'odd' or parity == 'even':
+            max_bsize = int(max_bsize / 2.)
+        else:
+            max_bsize = int(max_bsize)
+
+        #[for bin in subset of bins
+        # determine good ells
+        # flatten first_pass 
+        # get first part of interpolation
+        # loop over pol trplts and interpolate
+        # loop over good ells and square +inv.
+        
+        
+        # For good (l1,l2,l3) triplets and interpolated B resp.
+        triplets = np.zeros((max_bsize, 3), dtype=int)
+        b_interp = np.zeros((max_bsize, nptr), dtype=int)
+        
+        #####        
+        # We can get an estimate of array size per outer bin
+        # i.e. sizes_bispec * binwidth
+        # here you can optimze the number of bins per rank
+        # given some sort of max number of computations per rank
+        # (or just use largest bin as "unit") probably tiny overhead
+        
+
+        ## use num_pass to get nonzero elements in B for outer bin
+        ## create big empty array nl1, * nl2, nl3 /2 or something
+
 
         ## outer loop ##
         ## pick start and end of bin
-        ## use num_pass to get nonzero elements in B for outer bin
-        ## create big empty array
         ## loop over ells in outer bin and populte empty array with 
         ## all valid tuples
         ## use that (truncated) array and earlier array in griddata
@@ -2582,7 +2613,6 @@ class Fisher(Template, PreCalc):
         fisher = 0
 
         # allocate 12 x 12 cov for use in inner loop
-        nptr = self.bispec['pol_trpl'].shape[0]
         cl123 = np.zeros((nptr, nptr), dtype=float)
 
         # Depending on lmin, start outer loop not at first bin.

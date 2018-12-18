@@ -5,7 +5,7 @@ Collection of tools used for fisher analysis
 import numpy as np
 import warnings
 import scipy.stats as ss
-from numba import jit
+import numba
 
 def combine(a, b, c):
     '''
@@ -71,10 +71,10 @@ def binned_statistic(*args, **kwargs):
         ret = ss.binned_statistic(*args, **kwargs)
     return ret
 
-@jit(nopython=True)
+@numba.jit(nopython=True)
 def init_bins_jit(bins, idxs_on_rank, num_pass, first_pass, pmod):
     '''
-    Compute first and number of good triplets in bins.
+    Compute first and number of good triplets per bin.
 
     Arguments
     ---------
@@ -243,15 +243,83 @@ def init_bins_numpy(bins, idxs_on_rank, num_pass, first_pass, pmod):
 
                         num_pass[idx1,idx2_full,idx3_full] += n_pass
 
-    @jit(nopython=True)
-    def contract_bcb(B, C):
-        '''
-        Calculate B^T C B.
-        
-        Arguments
-        ---------
-        B : array-like
-        C : array-like
-        '''
-        
-        return np.dot(B, np.dot(C, B))
+@numba.jit(nopython=True)
+def area_trapezoid(ell1, lmax):
+    '''
+    Return the area of the isosceles trapezoid
+    that the angle-average bispectrum traces out 
+    in l2 x l3.
+
+    Arguments
+    ---------
+    ell1 : int
+    lmax : int
+
+    Returns
+    -------
+    area : float
+
+    Notes
+    -----
+              a
+        /-----------\
+    c  /             \
+      /______________ \
+              b
+
+    '''
+
+    a = np.sqrt(2 * max((lmax - 2 * ell1), 0) ** 2)
+    b = np.sqrt(2 * max((lmax - ell1), 0) ** 2)
+    c = min(ell1, lmax - ell1)
+
+    area = 0.5 * (a + b) * np.sqrt(max(c * c - 0.25 * (b - a) * (b - a), 0))
+
+    return area
+
+@numba.vectorize(nopython=True)
+def estimate_num_gd_tuples(ell1, lmax):
+    '''
+    Estimate the number of (l1, l2, l3) triples
+    allowed by triangle condition given l1 and lmax.
+
+    Arguments
+    ---------
+    ell1 : int
+    lmax : int            
+
+    Returns
+    -------
+    estimate : int
+
+    Notes
+    -----
+    Returns area of trapezoid spanned by allowed ell2, ell3 
+    doublets + perimeter of the square around the trapezoid 
+    (to correct for the discrete nature of the multipole triplets).
+    '''
+
+    area = area_trapezoid(ell1, lmax) 
+
+    perimeter = 4 * (max(lmax - ell1, 0))
+
+    return area + perimeter
+    
+@numba.jit(nopython=True)
+def get_gd_tuples(bins, ):
+    pass
+
+
+@numba.jit(nopython=True)
+def contract_bcb(B, C):
+    '''
+    Calculate B^T C B.
+
+    Arguments
+    ---------
+    B : array-like
+    C : array-like
+    '''
+
+    return np.dot(B, np.dot(C, B))
+
