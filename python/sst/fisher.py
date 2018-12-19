@@ -2508,7 +2508,7 @@ class Fisher(Template, PreCalc):
     def interp_fisher(self, invcov, ells, lmin=None, lmax=None,
                       fsky=1):
         '''
-        Calculate Fisher informatoin by interpolating 
+        Calculate Fisher information by interpolating 
         bispectra before squaring.
 
         Arguments
@@ -2539,8 +2539,6 @@ class Fisher(Template, PreCalc):
 
         bin_size = self.bins['bins'].size
         bins = self.bins['bins']
-        num_pass = self.bins['num_pass_full']
-        bispec = self.bispec['bispec']
         parity = self.bins['parity']
         nptr = self.bispec['pol_trpl'].shape[0]
 
@@ -2565,15 +2563,27 @@ class Fisher(Template, PreCalc):
 
         invcov1, invcov2, invcov3 = self._init_fisher_invcov(invcov)
 
-        # Decide size of allocated arrays.
-        ells_fisher = np.arange(2, lmax + 1)
-        sizes_bispec = tools.estimate_num_gd_tuples(ells_fisher, lmax)        
-        max_bsize = sizes_bispec.max()
+        if self.mpi_rank == 0:
+            # Decide how to distribute load over MPI ranks.
+            ells_fisher = np.arange(2, lmax + 1)
+            sizes_bispec = tools.estimate_n_tuples(ells_fisher, lmax)        
 
-        if parity == 'odd' or parity == 'even':
-            max_bsize = int(max_bsize / 2.)
-        else:
-            max_bsize = int(max_bsize)
+            bidx_sorted, n_per_bin = tools.rank_bins(
+                bins, sizes_bispec, ells_fisher)
+
+            n_sorted = n_per_bin[bidx_sorted]
+
+            max_bsize = sizes_bispec.max()
+
+
+            if parity == 'odd' or parity == 'even':
+                max_bsize = int(max_bsize / 2.)
+            else:
+                max_bsize = int(max_bsize)
+
+            num_pass = self.bins['num_pass_full']
+            bispec = self.bispec['bispec']
+
 
         #[for bin in subset of bins
         # determine good ells

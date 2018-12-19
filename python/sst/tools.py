@@ -278,7 +278,7 @@ def area_trapezoid(ell1, lmax):
     return area
 
 @numba.vectorize(nopython=True)
-def estimate_num_gd_tuples(ell1, lmax):
+def estimate_n_tuples(ell1, lmax):
     '''
     Estimate the number of (l1, l2, l3) triples
     allowed by triangle condition given l1 and lmax.
@@ -291,6 +291,7 @@ def estimate_num_gd_tuples(ell1, lmax):
     Returns
     -------
     estimate : int
+        Estimated number of triplets per l1 multipole.
 
     Notes
     -----
@@ -304,7 +305,142 @@ def estimate_num_gd_tuples(ell1, lmax):
     perimeter = 4 * (max(lmax - ell1, 0))
 
     return area + perimeter
+
+def rank_bins(bins, n_per_ell, ells):
+    '''
+    Return array of bin indices that will sort `bins` 
+    from small to large number of good tuples.
+
+    Arguments
+    ---------
+    bins : array-like
+        Left/lower side of bins. Monotonically increasing.
+    n_per_ell : array-like
+        Number of valid tuples per multipole.
+    ells : array-like
+        Multipoles (same lenght as n_tuples_per_ell)
+
+    Returns
+    -------
+    bidx_sorted : ndarray
+        Index array such that bins[bidx_sorted] is sorted.
+    n_per_bin : ndarray
+        Binned version of n_per_ell (in original order).
+    '''
+
     
+    bins_ext = np.empty(len(bins) + 1, dtype=float)
+    bins_ext[:-1] = np.asarray(bins, dtype=float)
+    bins_ext[-1] = bins[-1] + 0.1
+    n_per_bin, _, _ = binned_statistic(ells, n_per_ell,
+                                bins=bins_ext, statistic='sum')
+
+    bidx_sorted = np.argsort(n_per_bin)
+    
+    return bidx_sorted, n_per_bin
+
+def distribute_bins(bidx_sorted, n_per_bin, size, tol=0.1):
+    '''
+    Find roughly optimal bin indices per MPI rank based on
+    uniformity in "n".
+
+    Arguments
+    ---------
+    bidx_sorted
+        Index array such that bins[bidx_sorted] is in increasing order.
+    n_per_bin
+        Number per bin (in original order).
+    size : int
+        Number of MPI ranks.
+
+    Keyword arguments
+    -----------------
+    tol : float
+        Fractional tolerance in load difference between ranks.
+        (default : 0.1)
+
+    Returns
+    -------
+    bidx_per_rank : list of ndarrays
+        Bin indices per rank. Shape=(size, nbins)
+
+    Notes
+    -----
+    Idea is that rank 0 gets the bin with the most work
+    then rank 1 gets next-to-largest bin + a number of 
+    small-load bins etc. This is then repeated after
+    all ranks are treated.
+    '''
+
+    n_per_bin_sorted = n_per_bin[bidx_sorted] # Smallest first.
+    n_cum = np.cumsum(n_per_bin_sorted)
+
+    bidx_per_rank = [[] for i in xrange(size)]
+    
+    num_bins = bidx_sorted.size
+
+    i = 1 
+    bins_left = True
+    ii = 0
+    while bins_left:
+        
+        # Because I hate while loops.
+        ii += 1
+        if ii > 1000:
+            raise ValueError('Cannot find bin distribution')
+
+        for rank in xrange(size):
+
+            if i > num_bins:
+                bins_left = False
+                break
+
+            if rank == 0:
+                # Rank 0 receives bin with largest value.
+                bidx_per_rank[rank].append(bidx_sorted[-i])
+                n_max = n_per_bin_sorted[-i]
+
+                i += 1
+            
+            if rank > 0:
+                # Always give bin index with next largest value.
+                bidx = bidx_sorted[-i]
+                bidx_per_rank[rank].append(bidx)
+
+                # Find n for this rank
+                n_rank = n_per_bin_sorted[-i]
+
+                # Find more bins until n exceeds n_max
+                target = (1 + tol) * n_max - n_rank
+                indices = np.where(n_cum <= target)[0] 
+                bidx2add = bidx_sorted[indices] # Empty if none are.
+
+                for bi in bidx2add:
+                    if bi == bidx:
+                        bins_left = False
+                        break
+                    else:
+                        bidx_per_rank[rank].append(bi)
+
+                try:
+                    if indices[-1] == i + 1:
+                    # Last of small bins is final index
+                        bins_left = False
+                except IndexError:
+                    # Empty array.
+                    pass
+
+                if not bins_left:
+                    break
+
+                i += 1
+                
+    # Turn inner lists in arrays.
+    for i in xrange(len(bidx_per_rank)):
+        bidx_per_rank[i] = np.asarray(bidx_per_rank[i], dtype=int)
+
+    return bidx_per_rank
+                
 @numba.jit(nopython=True)
 def get_gd_tuples(bins, ):
     pass
@@ -323,3 +459,16 @@ def contract_bcb(B, C):
 
     return np.dot(B, np.dot(C, B))
 
+@numba.jit(nopython=True)
+def contract_bcb_loop(B, C, ii, jj):
+    
+    ans = 0.
+    for i in xrange(ii):
+        Bt = B[i]
+        Ct = C[i,:]
+        temp = 0
+        for j in xrange(jj):
+            temp += Bt * Ct[j] * B[j]
+
+        ans += temp
+    return ans
