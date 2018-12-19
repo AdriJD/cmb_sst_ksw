@@ -1954,8 +1954,14 @@ class Fisher(Template, PreCalc):
         success = self.broadcast(success)
 
         if success is True:
-            # for now, leave on root. Could broadcast here.
-            pass
+            # for now, leave bispec on root. Pol_triplets are
+            # on all ranks when calculated though, so broadcast.
+            if self.mpi_rank == 0:            
+                pol_trpl = self.bispec['pol_trpl']
+            else:
+                pol_trpl = None
+
+            self.bispec['pol_trpl'] = self.broadcast_array(pol_trpl)
 
         return success
 
@@ -2243,7 +2249,8 @@ class Fisher(Template, PreCalc):
             Multipoles corresponding to nls.
         nls : array-like
             Total covariance Nl, Cl or Nl + Cl. Shape: (6, ells.size)
-            in order: TT, EE, BB, TE, TB, EB
+            in order: TT, EE, BB, TE, TB, EB. If shape is (4, ells.size),
+            assume TB and EB are zero.
 
         Returns
         -------
@@ -2255,7 +2262,7 @@ class Fisher(Template, PreCalc):
         '''
         
         if not nls.shape[1] == ells.size:
-            raise ValueError("ells.size = {}, nls.shape[0] = {}".format(
+            raise ValueError("ells.size = {}, nls.shape[1] = {}".format(
                 ells.size, nls.shape[1]))
 
         nls_dict = {'TT': 0, 'EE': 1, 'BB': 2, 'TE': 3,
@@ -2264,7 +2271,11 @@ class Fisher(Template, PreCalc):
 
         cov = np.ones((ells.size, 3, 3))
         cov *= np.nan
-        invcov = bin_cov.copy()
+        invcov = cov.copy()
+
+        if nls.shape[0] == 4:
+            # Assume TB and EB are zero with ell.
+            nls = np.vstack([nls, np.zeros((2, ells.size), dtype=float)])
 
         for pidx1, pol1 in enumerate(['T', 'E', 'B']):
             for pidx2, pol2 in enumerate(['T', 'E', 'B']):
@@ -2277,7 +2288,7 @@ class Fisher(Template, PreCalc):
 
         # Invert.
         for lidx in xrange(ells.size):
-            bin_invcov[lidx,:,:] = inv(cov[lidx,:,:])
+            invcov[lidx,:,:] = inv(cov[lidx,:,:])
 
         if return_cov:
             return invcov, cov
@@ -2504,9 +2515,89 @@ class Fisher(Template, PreCalc):
         fisher *= self.common_amp ** 2 # (16 pi^4 As^2)^2
 
         return fisher
+
+    def _mpi_scatter_for_fisher(self, bidx_per_rank):
+        '''
+        Scatter data required for interpolated fisher
+        calculation from root to MPI ranks.
+        
+        Arguments
+        ---------
+        bidx_per_rank : list of ndarrays
+            Array of bin indices for each MPI rank
+            (object present on all ranks).
+
+        Returns
+        -------
+        first_pass_per_bin : list of ndarrays
+            List of first_pass arrays shape (1, nbins, nbins, 3),
+            same order as bidx_per_rank.
+        bispec_per_bin : list of ndarrays
+            List of bispec arrays shape (1, nbins, nbins, nptr),
+            same order as bidx_per_rank.
+        '''
+        
+        num_bins = self.bins['bins'].size
+        size = self.mpi_size
+        nptr = self.bispec['pol_trpl'].shape[0]
+        
+
+
+        # Treat bins on rank 0 separately, send/recv same rank buggy.
+        for rank in xrange(1, size):
+                            
+            bidxs = bidx_per_rank[rank]
+
+            # Lists to store incoming arrays.
+            first_pass_per_bin = [[] for i in bidxs]
+            bispec_per_bin = [[] for i in bidxs]
+
+            for i, bidx in enumerate(bidxs):
+
+                if self.mpi_rank == 0:
+                    
+                    # No need to send meta-data, ranks know size incoming.            
+                    # Send first_pass, bispec per outer bin.
+
+                    first_pass_send = self.bins['first_pass_full'][bidx,...]
+                    bispec_send = self.bispec['bispec'][bidx,...]
+                    self._comm.Send(first_pass_send, dest=rank, tag=rank)
+                    self._comm.Send(bispec_send, dest=rank, tag=rank + size)
+                    
+                if self.mpi_rank == rank:
+        
+                    # Allocate empty arrays.
+                    first_pass_rec = np.empty((1,num_bins,num_bins,3),
+                                              dtype=int)
+                    bispec_rec = np.empty((1,num_bins,num_bins,nptr),
+                                              dtype=float)
+
+                    self._comm.Recv(first_pass_rec, source=0,
+                                    tag=rank)
+                    self._comm.Recv(bispec_rec, source=0,
+                                    tag=rank + size)
+                    
+                    first_pass_per_bin[i] = first_pass_rec
+                    bispec_per_bin[i] = bispec_rec
+                    
+        # Do the same without send/recv for rank 0.
+        if self.mpi_rank == 0:                    
+
+            bidxs = bidx_per_rank[0]            
+            first_pass_per_bin = [[] for i in bidxs]
+            bispec_per_bin = [[] for i in bidxs]
+
+            for i, bidx in enumerate(bidxs):
+                first_pass = self.bins['first_pass_full'][bidx,...]
+                bispec = self.bispec['bispec'][bidx,...]
+
+                first_pass_per_bin[i] = first_pass
+                bispec_per_bin[i] = bispec
+
+        return first_pass_per_bin, bispec_per_bin
     
     def interp_fisher(self, invcov, ells, lmin=None, lmax=None,
-                      fsky=1):
+                      fsky=1, verbose=True):
         '''
         Calculate Fisher information by interpolating 
         bispectra before squaring.
@@ -2539,7 +2630,7 @@ class Fisher(Template, PreCalc):
 
         bin_size = self.bins['bins'].size
         bins = self.bins['bins']
-        parity = self.bins['parity']
+        parity = self.bins['parity']        
         nptr = self.bispec['pol_trpl'].shape[0]
 
         # Check input.
@@ -2573,16 +2664,41 @@ class Fisher(Template, PreCalc):
 
             n_sorted = n_per_bin[bidx_sorted]
 
-            max_bsize = sizes_bispec.max()
+            bidx_per_rank = tools.distribute_bins(bidx_sorted,
+                                      n_per_bin, self.mpi_size)
+
+        else:
+            bidx_per_rank = None
+
+        bidx_per_rank = self.broadcast(bidx_per_rank)
+        bins_on_rank = bins[bidx_per_rank[self.mpi_rank]]
+
+        if verbose:
+            for rank in xrange(self.mpi_size):
+                if self.mpi_rank == rank:
+                    bins_on_rank
+                    print('[rank {:03d}]: working on bins {}'.format(
+                        rank, bins_on_rank))
+
+        # Note: fp = first_pass, b = bispec. Lists of arrays per bidx.
+        fp_per_bin, b_per_bin = self._mpi_scatter_for_fisher(bidx_per_rank)
 
 
-            if parity == 'odd' or parity == 'even':
-                max_bsize = int(max_bsize / 2.)
-            else:
-                max_bsize = int(max_bsize)
+        exit()
+            # scatter bidx_per_rank
+            # scatter n_per_bin   : do decide size of arrays, actu. why not num_bins?
+            # scatter bispectrum, first_pass, num_pass (?)
+            # 
 
-            num_pass = self.bins['num_pass_full']
-            bispec = self.bispec['bispec']
+#            max_bsize = sizes_bispec.max()
+#            if parity == 'odd' or parity == 'even':
+#                max_bsize = int(max_bsize / 2.)
+#            else:
+#                max_bsize = int(max_bsize)
+
+#            num_pass = self.bins['num_pass_full']
+#            first_pass = self.bins['first_pass_full']
+#            bispec = self.bispec['bispec']
 
 
         #[for bin in subset of bins

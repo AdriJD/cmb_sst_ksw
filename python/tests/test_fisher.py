@@ -123,6 +123,7 @@ class TestTools(unittest.TestCase):
         parity = 'odd'
         F = Fisher(self.test_dir)
         F.init_bins(lmin=lmin, lmax=lmax, parity=parity, bins=bins)
+        F.init_pol_triplets()
         b_shape = (len(bins), len(bins), len(bins), 12)
         test_bispec = np.arange(len(bins)**3 * 12, dtype=float).reshape(b_shape)
 

@@ -379,7 +379,10 @@ def distribute_bins(bidx_sorted, n_per_bin, size, tol=0.1):
     
     num_bins = bidx_sorted.size
 
-    i = 1 
+    mask = np.ones(bidx_sorted.size, dtype=bool)
+    i = 1 # Counter over sorted bidx array right2left.
+    start = 0 # Counter for left2right.
+    end = None
     bins_left = True
     ii = 0
     while bins_left:
@@ -391,32 +394,50 @@ def distribute_bins(bidx_sorted, n_per_bin, size, tol=0.1):
 
         for rank in xrange(size):
 
-            if i > num_bins:
+            if i > num_bins or -i == end:
                 bins_left = False
                 break
 
             if rank == 0:
-                # Rank 0 receives bin with largest value.
-                bidx_per_rank[rank].append(bidx_sorted[-i])
-                n_max = n_per_bin_sorted[-i]
-
-                i += 1
+                # Rank 0 receives bin with largest value.                
+                if mask[-i]:
+                    bidx_per_rank[rank].append(bidx_sorted[-i])
+                    n_max = n_per_bin_sorted[-i]
+                    mask[-i] = False
+                    i += 1
+                else:
+                    bins_left = False
+                    break
             
             if rank > 0:
                 # Always give bin index with next largest value.
-                bidx = bidx_sorted[-i]
-                bidx_per_rank[rank].append(bidx)
+                if mask[-i]:
+                    bidx = bidx_sorted[-i]
+                    bidx_per_rank[rank].append(bidx)
+                    mask[-i] = False
+                else:
+                    bins_left = False
+                    break
 
                 # Find n for this rank
                 n_rank = n_per_bin_sorted[-i]
 
-                # Find more bins until n exceeds n_max
+                # Find more bins until n exceeds n_max.
                 target = (1 + tol) * n_max - n_rank
-                indices = np.where(n_cum <= target)[0] 
+                indices = np.where(n_cum[start:] <= target)[0] 
+
+                # NOTE, search needs to update its starting point...
+                if indices.size > 0:
+                    indices += start
+                    start = indices[-1] + 1
+                    end = indices[-1]
+                    mask[indices] = False
+
                 bidx2add = bidx_sorted[indices] # Empty if none are.
 
                 for bi in bidx2add:
                     if bi == bidx:
+                        # We have met in the middle.
                         bins_left = False
                         break
                     else:
@@ -424,7 +445,7 @@ def distribute_bins(bidx_sorted, n_per_bin, size, tol=0.1):
 
                 try:
                     if indices[-1] == i + 1:
-                    # Last of small bins is final index
+                        # This index will be considered next.
                         bins_left = False
                 except IndexError:
                     # Empty array.
@@ -436,8 +457,17 @@ def distribute_bins(bidx_sorted, n_per_bin, size, tol=0.1):
                 i += 1
                 
     # Turn inner lists in arrays.
+    check = []
     for i in xrange(len(bidx_per_rank)):
+        check.append(bidx_per_rank[i])
         bidx_per_rank[i] = np.asarray(bidx_per_rank[i], dtype=int)
+    check = [item for sublist in check for item in sublist]
+
+    check = np.asarray(check)
+    if np.unique(check).size != bidx_sorted.size:
+        raise ValueError('bins not distributed right')
+    if check.size != bidx_sorted.size:
+        raise ValueError('bins not distributed right')
 
     return bidx_per_rank
                 
