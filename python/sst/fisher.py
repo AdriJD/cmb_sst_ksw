@@ -2529,14 +2529,14 @@ class Fisher(Template, PreCalc):
 
         Returns
         -------
-        first_pass_per_bin : list of ndarrays
+        first_pass_per_bidx : list of ndarrays
             List of first_pass arrays with shape: (M, 3),
             same order as bidx_per_rank.
-        bispec_per_bin : list of ndarrays
+        bispec_per_bidx : list of ndarrays
             List of bispec arrays with shape (M, nptr),
             same order as bidx_per_rank. 
-        num_triplets_per_bin : array-like
-            Number of valid tuples per bin, same order as bidx_per_rank.
+        num_triplets_per_bidx : array-like
+            Number of valid tuples per bidx, same order as bidx_per_rank.
 
         Notes
         -----
@@ -2576,9 +2576,10 @@ class Fisher(Template, PreCalc):
                             
             bidxs = bidx_per_rank[rank]
 
-            first_pass_per_bin = [[] for i in bidxs]
-            num_triplets_per_bin = np.zeros(bidxs.size, dtype=int)
-            bispec_per_bin = [[] for i in bidxs]
+            if self.mpi_rank == rank:
+                first_pass_per_bidx = [[] for i in bidxs]
+                num_triplets_per_bidx = np.zeros(bidxs.size, dtype=int)
+                bispec_per_bidx = [[] for i in bidxs]
 
             for idx, bidx in enumerate(bidxs):
                 
@@ -2587,48 +2588,54 @@ class Fisher(Template, PreCalc):
                 if self.mpi_rank == 0:
 
                     f_pass = self.bins['first_pass_full']
+                    num_pass = self.bins['first_pass_full']                    
                     bispec = self.bispec['bispec']
 
                     # Only use valid tuples.
                     mask = n_pass_bool[b_start:b_stop,...]
-                    
+
+                    # Select data
                     f_pass_send = f_pass[b_start:b_stop,...][mask]
                     bispec_send = bispec[b_start:b_stop,...][mask]
+                    num_triplets = np.sum(num_pass[b_start:b_stop,...])
 
                     # First send meta-data.
-                    num_triplets = np.sum(mask)
-                    self._comm.send(num_triplets, dest=rank, tag=rank)
+                    array_size = np.sum(mask)
+                    self._comm.send(array_size, dest=rank, tag=rank)
 
                     # Then actual data
                     self._comm.Send(f_pass_send, dest=rank, tag=rank + size)
                     self._comm.Send(bispec_send, dest=rank, tag=rank + 2 * size)
-                    
+                    self._comm.send(num_triplets, dest=rank, tag=rank + 3 * size)
+
                 if self.mpi_rank == rank:
 
                     # Receive meta-data
-                    num_triplets = self._comm.recv(source=0, tag=rank)
+                    array_size = self._comm.recv(source=0, tag=rank)
 
                     # Allocate empty arrays and receive data.
-                    first_pass_rec = np.empty((num_triplets,3), dtype=int)
-                    bispec_rec = np.empty((num_triplets,nptr), dtype=float)
+                    first_pass_rec = np.empty((array_size,3), dtype=int)
+                    bispec_rec = np.empty((array_size,nptr), dtype=float)
 
                     self._comm.Recv(first_pass_rec, source=0,
                                     tag=rank + size)
                     self._comm.Recv(bispec_rec, source=0,
                                     tag=rank + 2 * size)
-                    
-                    first_pass_per_bin[idx] = first_pass_rec
-                    num_triplets_per_bin[idx] = num_triplets
-                    bispec_per_bin[idx] = bispec_rec
+                    num_triplets = self._comm.recv(source=0,
+                                    tag=rank + 3 * size)
+
+                    first_pass_per_bidx[idx] = first_pass_rec
+                    num_triplets_per_bidx[idx] = num_triplets
+                    bispec_per_bidx[idx] = bispec_rec
                     
         # Do the same without send/recv for rank 0.
         if self.mpi_rank == 0:                    
 
             bidxs = bidx_per_rank[0]            
 
-            first_pass_per_bin = [[] for i in bidxs]
-            num_triplets_per_bin = np.zeros(bidxs.size, dtype=int)
-            bispec_per_bin = [[] for i in bidxs]
+            first_pass_per_bidx = [[] for i in bidxs]
+            num_triplets_per_bidx = np.zeros(bidxs.size, dtype=int)
+            bispec_per_bidx = [[] for i in bidxs]
 
             for idx, bidx in enumerate(bidxs):
 
@@ -2636,24 +2643,31 @@ class Fisher(Template, PreCalc):
                 mask = n_pass_bool[b_start:b_stop,...]
 
                 f_pass = self.bins['first_pass_full'][b_start:b_stop,...][mask]
+                num_pass = self.bins['num_pass_full'][b_start:b_stop,...]
                 bispec = self.bispec['bispec'][b_start:b_stop,...][mask]
 
-                num_triplets = np.sum(mask)
+                num_triplets = np.sum(num_pass)
 
-                first_pass_per_bin[idx] = f_pass
-                num_triplets_per_bin[idx] = num_triplets
-                bispec_per_bin[idx] = bispec
+                first_pass_per_bidx[idx] = f_pass
+                num_triplets_per_bidx[idx] = num_triplets
+                bispec_per_bidx[idx] = bispec
 
-        return first_pass_per_bin, bispec_per_bin, num_triplets_per_bin
+        return first_pass_per_bidx, bispec_per_bidx, num_triplets_per_bidx
     
-#    def _get_tuples(self, first_pass_tuples, , np_per_bin, b_per_bin):
-#        '''
-        
-        
-#        Create array of good (l1,l2,l3) tuples in bin
+    def _init_triplets(self, n_trpl_per_bidx):
+        '''
+        For each MPI rank
 
         
-#        '''
+        Arguments
+        ---------
+        num_triplets_per_bidx : array-like
+            Number of valid tuples per bin, same order as bidx_per_rank.
+        
+        '''
+        
+#        tools.get_good_triplets(bmin, bmax, lmax, good_triplets, pmod)
+
 
     def interp_fisher(self, invcov, ells, lmin=None, lmax=None,
                       fsky=1, verbose=True):
@@ -2721,11 +2735,8 @@ class Fisher(Template, PreCalc):
             bidx_sorted, n_per_bin = tools.rank_bins(
                 bins, sizes_bispec, ells_fisher)
 
-            n_sorted = n_per_bin[bidx_sorted]
-
             bidx_per_rank = tools.distribute_bins(bidx_sorted,
                                       n_per_bin, self.mpi_size)
-
         else:
             bidx_per_rank = None
 
@@ -2735,16 +2746,26 @@ class Fisher(Template, PreCalc):
         if verbose:
             for rank in xrange(self.mpi_size):
                 if self.mpi_rank == rank:
-                    bins_on_rank
                     print('[rank {:03d}]: working on bins {}'.format(
                         rank, bins_on_rank))
 
         # Note: fp = first_pass, b = bispec. Lists of arrays per bidx.
-        fp_per_bin, np_per_bin, b_per_bin = self._mpi_scatter_for_fisher(
-                                                            bidx_per_rank)
-
+        fp_per_bidx, b_per_bidx, n_trpl_per_bidx = self._mpi_scatter_for_fisher(
+            bidx_per_rank)
         
+        # self._init_triplets(n_trpl_per_bidx)
+        self.barrier()
+        print(self.mpi_rank, bidx_per_rank[self.mpi_rank].size)
+        print(self.mpi_rank, n_trpl_per_bidx.size)
+        self.barrier()
+        for idx, bidx in enumerate(bidx_per_rank[self.mpi_rank]):
+            b1 = bins[bidx]
 
+            num_triplets = n_trpl_per_bidx[idx] # int, telling how many good triplets in bidx
+            print(self.mpi_rank, bidx, b1, num_triplets)
+
+
+        self.barrier()
         exit()
 #            max_bsize = sizes_bispec.max()
 #            if parity == 'odd' or parity == 'even':
