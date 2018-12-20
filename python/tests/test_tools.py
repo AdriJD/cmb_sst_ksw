@@ -199,4 +199,72 @@ class TestTools(unittest.TestCase):
         exp_arr = np.asarray([]) # Rank 5.
         np.testing.assert_array_equal(bidx_per_rank[5], exp_arr)
 
+    def test_get_good_triplets(self):
+
+        bmin = 2
+        bmax = 4
+        lmax = 5
+        pmod = 1
+
+        # With these options I expect only the following triplets.
+        exp_ans = np.asarray([[2, 2, 3], [2, 3, 4], [2, 4, 5], [3, 3, 3],
+                              [3, 3, 5], [3, 4, 4], [3, 5, 5], [4, 4, 5]])
+        good_triplets = np.zeros_like(exp_ans)
+
+        tools.get_good_triplets(bmin, bmax, lmax, good_triplets, pmod)
+
+        np.testing.assert_array_equal(exp_ans, good_triplets)
+
+        ### 
+        pmod = 0
+        # With these options I expect only the following triplets.
+
+        exp_ans2 = np.asarray([[2, 2, 2], [2, 2, 4], [2, 3, 3], [2, 3, 5],
+                               [2, 4, 4], [2, 5, 5], [3, 3, 4], [3, 4, 5],
+                               [4, 4, 4], [4, 5, 5]])
+        good_triplets = np.zeros_like(exp_ans2)
+
+        tools.get_good_triplets(bmin, bmax, lmax, good_triplets, pmod)
+
+        np.testing.assert_array_equal(exp_ans2, good_triplets)
+        
+        ###
+        pmod = 2
+        # With these options I expect only the following triplets.
+        exp_ans3 = np.asarray([[2, 2, 2], [2, 2, 3], [2, 2, 4], [2, 3, 3],
+                               [2, 3, 4], [2, 3, 5], [2, 4, 4], [2, 4, 5],
+                               [2, 5, 5], [3, 3, 3], [3, 3, 4], [3, 3, 5],
+                               [3, 4, 4], [3, 4, 5], [3, 5, 5], [4, 4, 4],
+                               [4, 4, 5], [4, 5, 5]])
+
+        good_triplets = np.zeros_like(exp_ans3)
+
+        tools.get_good_triplets(bmin, bmax, lmax, good_triplets, pmod)
+
+        np.testing.assert_array_equal(exp_ans3, good_triplets)
+
+    def test_get_good_triplets_err(self):
+
+        bmin = 2
+        bmax = 4
+        lmax = 5
+        pmod = 1
+
+        # With these options I expect only the following triplets.
+        # ([[2, 2, 3], [2, 3, 4], [2, 4, 5], [3, 3, 3],
+        #   [3, 3, 5], [3, 4, 4], [3, 5, 5], [4, 4, 5]])
+        # so good_triplets should have shape (8, 3).
+
+        # Give a too large array, should crash.
+        good_triplets = np.zeros((9, 3), dtype=int)
+
+
+        with self.assertRaises(ValueError):
+            tools.get_good_triplets(bmin, bmax, lmax, good_triplets, pmod)
+
+        # Give too small array, should crash.
+        good_triplets = np.zeros((7, 3), dtype=int)
+
+        with self.assertRaises(ValueError):
+            tools.get_good_triplets(bmin, bmax, lmax, good_triplets, pmod)
 

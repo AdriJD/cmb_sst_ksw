@@ -464,18 +464,86 @@ def distribute_bins(bidx_sorted, n_per_bin, size, tol=0.1):
     check = [item for sublist in check for item in sublist]
 
     check = np.asarray(check)
-    if np.unique(check).size != bidx_sorted.size:
-        raise ValueError('bins not distributed right')
-    if check.size != bidx_sorted.size:
+    if not np.array_equal(np.unique(check), np.arange(num_bins)):
         raise ValueError('bins not distributed right')
 
     return bidx_per_rank
                 
+def get_good_triplets(bmin, bmax, lmax, good_triplets, pmod):
+    '''
+    Fill array with all valid triplets.
+
+    Arguments
+    ---------
+    bmin : int
+    bmax : int
+    lmax : int
+    good_triplets : ndarray, dtype=int
+        Shape (N, 3)
+    pmod : int
+    '''
+
+    ret = _get_good_triplets(bmin, bmax, lmax, good_triplets, pmod)
+    if ret == -1:
+        raise ValueError('good_triplets has wrong size: {}'.format(
+            good_triplets.shape))
+    else:
+        return
+
 @numba.jit(nopython=True)
-def get_gd_tuples(bins, ):
-    pass
+def _get_good_triplets(bmin, bmax, lmax, good_triplets, pmod):
+    '''
+    Fill array with all valid triplets.
 
+    Arguments
+    ---------
+    bmin : int
+    bmax : int
+    lmax : int
+    good_triplets : ndarray, dtype=int
+        Shape (N, 3)
+    pmod : int
+    '''
 
+    input_size = good_triplets.shape[0]
+
+    ii = 0 # Iterate over triplets.
+    for ell1 in xrange(bmin, bmax + 1):
+        
+        for ell2 in xrange(ell1, lmax + 1):            
+            for ell3 in xrange(ell2, lmax + 1):
+
+                # RHS triangle ineq.
+                if ell3 > (ell1 + ell2):
+                    # There will no valid one after this.
+                    break                            
+
+                if ell3 < ell2 or ell3 < ell1:
+                    # This takes care of |l1 - l2| <= l3
+                    continue
+
+                # Parity. Pmod = 1 if parity == 0
+                if pmod != 2:
+                    if (ell1 + ell2 + ell3) % 2 != pmod:
+                        continue
+
+                # Error checking. If input arr too small
+                # you might get seg. faults etc.
+                if ii >= input_size:
+                    return -1
+
+                good_triplets[ii,0] = ell1
+                good_triplets[ii,1] = ell2
+                good_triplets[ii,2] = ell3
+
+                ii += 1
+
+    # Another check, for too large input array.
+    if ii != input_size:
+        return -1
+
+    return            
+    
 @numba.jit(nopython=True)
 def contract_bcb(B, C):
     '''

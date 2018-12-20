@@ -2530,72 +2530,131 @@ class Fisher(Template, PreCalc):
         Returns
         -------
         first_pass_per_bin : list of ndarrays
-            List of first_pass arrays shape (1, nbins, nbins, 3),
+            List of first_pass arrays with shape: (M, 3),
             same order as bidx_per_rank.
         bispec_per_bin : list of ndarrays
-            List of bispec arrays shape (1, nbins, nbins, nptr),
-            same order as bidx_per_rank.
+            List of bispec arrays with shape (M, nptr),
+            same order as bidx_per_rank. 
+        num_triplets_per_bin : array-like
+            Number of valid tuples per bin, same order as bidx_per_rank.
+
+        Notes
+        -----
+        M = sum(num_pass[bin,...].astype(bool)) (i.e. num_tuples)
         '''
         
         num_bins = self.bins['bins'].size
         size = self.mpi_size
         nptr = self.bispec['pol_trpl'].shape[0]
-        
+        bins = self.bins['bins']
+        num_bins = bins.size
 
+        # For use in loop.
+        if self.mpi_rank == 0:
+            n_pass_bool = self.bins['num_pass_full'].astype(bool)
+
+        def get_slice(bidx):
+            '''Return start and stop indices for outer bin'''
+            # We need to give slice that spans one bin
+            # before and after bidx bin for interpolation.
+            if bidx == 0:
+                # First bin, only give second bin.
+                b_start = bidx
+                b_stop = bidx + 2
+            elif bidx == num_bins - 1:
+                # Last bin, only give second-to-last bin.
+                b_start = bidx - 1
+                b_stop = bidx + 1
+            else:
+                b_start = bidx - 1
+                b_stop = bidx + 2
+
+            return b_start, b_stop
 
         # Treat bins on rank 0 separately, send/recv same rank buggy.
         for rank in xrange(1, size):
                             
             bidxs = bidx_per_rank[rank]
 
-            # Lists to store incoming arrays.
             first_pass_per_bin = [[] for i in bidxs]
+            num_triplets_per_bin = np.zeros(bidxs.size, dtype=int)
             bispec_per_bin = [[] for i in bidxs]
 
-            for i, bidx in enumerate(bidxs):
-
+            for idx, bidx in enumerate(bidxs):
+                
+                b_start, b_stop = get_slice(bidx)
+                
                 if self.mpi_rank == 0:
-                    
-                    # No need to send meta-data, ranks know size incoming.            
-                    # Send first_pass, bispec per outer bin.
 
-                    first_pass_send = self.bins['first_pass_full'][bidx,...]
-                    bispec_send = self.bispec['bispec'][bidx,...]
-                    self._comm.Send(first_pass_send, dest=rank, tag=rank)
-                    self._comm.Send(bispec_send, dest=rank, tag=rank + size)
+                    f_pass = self.bins['first_pass_full']
+                    bispec = self.bispec['bispec']
+
+                    # Only use valid tuples.
+                    mask = n_pass_bool[b_start:b_stop,...]
+                    
+                    f_pass_send = f_pass[b_start:b_stop,...][mask]
+                    bispec_send = bispec[b_start:b_stop,...][mask]
+
+                    # First send meta-data.
+                    num_triplets = np.sum(mask)
+                    self._comm.send(num_triplets, dest=rank, tag=rank)
+
+                    # Then actual data
+                    self._comm.Send(f_pass_send, dest=rank, tag=rank + size)
+                    self._comm.Send(bispec_send, dest=rank, tag=rank + 2 * size)
                     
                 if self.mpi_rank == rank:
-        
-                    # Allocate empty arrays.
-                    first_pass_rec = np.empty((1,num_bins,num_bins,3),
-                                              dtype=int)
-                    bispec_rec = np.empty((1,num_bins,num_bins,nptr),
-                                              dtype=float)
+
+                    # Receive meta-data
+                    num_triplets = self._comm.recv(source=0, tag=rank)
+
+                    # Allocate empty arrays and receive data.
+                    first_pass_rec = np.empty((num_triplets,3), dtype=int)
+                    bispec_rec = np.empty((num_triplets,nptr), dtype=float)
 
                     self._comm.Recv(first_pass_rec, source=0,
-                                    tag=rank)
-                    self._comm.Recv(bispec_rec, source=0,
                                     tag=rank + size)
+                    self._comm.Recv(bispec_rec, source=0,
+                                    tag=rank + 2 * size)
                     
-                    first_pass_per_bin[i] = first_pass_rec
-                    bispec_per_bin[i] = bispec_rec
+                    first_pass_per_bin[idx] = first_pass_rec
+                    num_triplets_per_bin[idx] = num_triplets
+                    bispec_per_bin[idx] = bispec_rec
                     
         # Do the same without send/recv for rank 0.
         if self.mpi_rank == 0:                    
 
             bidxs = bidx_per_rank[0]            
+
             first_pass_per_bin = [[] for i in bidxs]
+            num_triplets_per_bin = np.zeros(bidxs.size, dtype=int)
             bispec_per_bin = [[] for i in bidxs]
 
-            for i, bidx in enumerate(bidxs):
-                first_pass = self.bins['first_pass_full'][bidx,...]
-                bispec = self.bispec['bispec'][bidx,...]
+            for idx, bidx in enumerate(bidxs):
 
-                first_pass_per_bin[i] = first_pass
-                bispec_per_bin[i] = bispec
+                b_start, b_stop = get_slice(bidx)
+                mask = n_pass_bool[b_start:b_stop,...]
 
-        return first_pass_per_bin, bispec_per_bin
+                f_pass = self.bins['first_pass_full'][b_start:b_stop,...][mask]
+                bispec = self.bispec['bispec'][b_start:b_stop,...][mask]
+
+                num_triplets = np.sum(mask)
+
+                first_pass_per_bin[idx] = f_pass
+                num_triplets_per_bin[idx] = num_triplets
+                bispec_per_bin[idx] = bispec
+
+        return first_pass_per_bin, bispec_per_bin, num_triplets_per_bin
     
+#    def _get_tuples(self, first_pass_tuples, , np_per_bin, b_per_bin):
+#        '''
+        
+        
+#        Create array of good (l1,l2,l3) tuples in bin
+
+        
+#        '''
+
     def interp_fisher(self, invcov, ells, lmin=None, lmax=None,
                       fsky=1, verbose=True):
         '''
@@ -2681,25 +2740,17 @@ class Fisher(Template, PreCalc):
                         rank, bins_on_rank))
 
         # Note: fp = first_pass, b = bispec. Lists of arrays per bidx.
-        fp_per_bin, b_per_bin = self._mpi_scatter_for_fisher(bidx_per_rank)
+        fp_per_bin, np_per_bin, b_per_bin = self._mpi_scatter_for_fisher(
+                                                            bidx_per_rank)
 
+        
 
         exit()
-            # scatter bidx_per_rank
-            # scatter n_per_bin   : do decide size of arrays, actu. why not num_bins?
-            # scatter bispectrum, first_pass, num_pass (?)
-            # 
-
 #            max_bsize = sizes_bispec.max()
 #            if parity == 'odd' or parity == 'even':
 #                max_bsize = int(max_bsize / 2.)
 #            else:
 #                max_bsize = int(max_bsize)
-
-#            num_pass = self.bins['num_pass_full']
-#            first_pass = self.bins['first_pass_full']
-#            bispec = self.bispec['bispec']
-
 
         #[for bin in subset of bins
         # determine good ells

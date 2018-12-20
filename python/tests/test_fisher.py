@@ -1,7 +1,7 @@
 import unittest
 import numpy as np
 import os
-from sst import Fisher
+from sst import Fisher, tools
 
 opj = os.path.join
 
@@ -140,4 +140,28 @@ class TestTools(unittest.TestCase):
         F._load_binned_bispec('test_bispec.pkl')
 
         np.testing.assert_almost_equal(test_bispec, F.bispec['bispec'])
+
+    def test_first_pass(self):
+        
+        # first_pass with unbinned mulitpoles should agree
+        # with get_good_triplets from tools.
+
+        lmin = 4
+        lmax = 10
+        bins = np.arange(lmin, lmax + 1)
+        parity = 'odd'
+        pmod = 1
+
+        F = Fisher(self.test_dir)
+        F.init_bins(lmin=lmin, lmax=lmax, parity=parity, bins=bins)
+        num_pass = F.bins['num_pass_full']
+        first_pass = F.bins['first_pass_full']
+        
+        good_triplets_exp = first_pass[num_pass.astype(bool)]
+        good_triplets = np.zeros_like(good_triplets_exp)
+
+        tools.get_good_triplets(lmin, lmax, lmax, good_triplets, pmod)
+        
+        np.testing.assert_array_equal(good_triplets_exp, good_triplets)
+
 
