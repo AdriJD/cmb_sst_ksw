@@ -455,8 +455,9 @@ class PreCalc(MPIBase):
         if lmax <= lmin:
             raise ValueError('lmax <= lmin')
 
-        self.bins['lmax'] = lmax
-        self.bins['lmin'] = lmin
+#        self.bins['lmax'] = lmax
+#        self.bins['lmin'] = lmin
+
         ells = np.arange(lmin, lmax+1)
         self.bins['ells'] = ells
 
@@ -481,6 +482,10 @@ class PreCalc(MPIBase):
         np.testing.assert_array_equal(np.unique(bins), bins)
 
         self.bins['bins'] = bins
+        # NOTE
+        self.bins['lmax'] = bins[-1]
+        self.bins['lmin'] = bins[0]
+
         idx = np.arange(bins.size) # indices to bins
         num_bins = bins.size
 
@@ -2543,7 +2548,6 @@ class Fisher(Template, PreCalc):
         M = sum(num_pass[bin,...].astype(bool)) (i.e. num_tuples)
         '''
         
-        num_bins = self.bins['bins'].size
         size = self.mpi_size
         nptr = self.bispec['pol_trpl'].shape[0]
         bins = self.bins['bins']
@@ -2582,13 +2586,12 @@ class Fisher(Template, PreCalc):
                 bispec_per_bidx = [[] for i in bidxs]
 
             for idx, bidx in enumerate(bidxs):
-                
                 b_start, b_stop = get_slice(bidx)
                 
                 if self.mpi_rank == 0:
 
                     f_pass = self.bins['first_pass_full']
-                    num_pass = self.bins['first_pass_full']                    
+                    num_pass = self.bins['num_pass_full']                    
                     bispec = self.bispec['bispec']
 
                     # Only use valid tuples.
@@ -2597,7 +2600,7 @@ class Fisher(Template, PreCalc):
                     # Select data
                     f_pass_send = f_pass[b_start:b_stop,...][mask]
                     bispec_send = bispec[b_start:b_stop,...][mask]
-                    num_triplets = np.sum(num_pass[b_start:b_stop,...])
+                    num_triplets = np.sum(num_pass[bidx,...])
 
                     # First send meta-data.
                     array_size = np.sum(mask)
@@ -2643,7 +2646,7 @@ class Fisher(Template, PreCalc):
                 mask = n_pass_bool[b_start:b_stop,...]
 
                 f_pass = self.bins['first_pass_full'][b_start:b_stop,...][mask]
-                num_pass = self.bins['num_pass_full'][b_start:b_stop,...]
+                num_pass = self.bins['num_pass_full'][bidx,...]
                 bispec = self.bispec['bispec'][b_start:b_stop,...][mask]
 
                 num_triplets = np.sum(num_pass)
@@ -2654,19 +2657,43 @@ class Fisher(Template, PreCalc):
 
         return first_pass_per_bidx, bispec_per_bidx, num_triplets_per_bidx
     
-    def _init_triplets(self, n_trpl_per_bidx):
+    def _init_triplets(self, bidx, num_triplets):
         '''
-        For each MPI rank
-
         
         Arguments
         ---------
-        num_triplets_per_bidx : array-like
-            Number of valid tuples per bin, same order as bidx_per_rank.
-        
+        bidx : int
+            Bin index.
+        num_triplets : int
+            Number of good (l1,l2,l3) triplets in this outer bin.
+
+        Returns
+        -------
+        triplets : ndarray
+            (l1,l2,l3) triplets, shape : (num_triplets, 3)
         '''
+
+        good_triplets = np.zeros((num_triplets, 3), dtype=int)
         
-#        tools.get_good_triplets(bmin, bmax, lmax, good_triplets, pmod)
+        bins = self.bins['bins']
+        lmax = self.bins['lmax']
+        bmin = bins[bidx]
+        try:
+            bmax = bins[bidx + 1] - 1
+        except IndexError:
+            bmax = lmax
+
+        parity = self.bins['parity']
+        if parity == 'odd':
+            pmod = 1
+        elif parity == 'even':
+            pmod = 0
+        else:
+            pmod = 2
+
+        tools.get_good_triplets(bmin, bmax, lmax, good_triplets, pmod)
+        
+        return good_triplets
 
 
     def interp_fisher(self, invcov, ells, lmin=None, lmax=None,
@@ -2701,7 +2728,6 @@ class Fisher(Template, PreCalc):
             Fisher information.        
         '''
 
-        bin_size = self.bins['bins'].size
         bins = self.bins['bins']
         parity = self.bins['parity']        
         nptr = self.bispec['pol_trpl'].shape[0]
@@ -2753,17 +2779,10 @@ class Fisher(Template, PreCalc):
         fp_per_bidx, b_per_bidx, n_trpl_per_bidx = self._mpi_scatter_for_fisher(
             bidx_per_rank)
         
-        # self._init_triplets(n_trpl_per_bidx)
-        self.barrier()
-        print(self.mpi_rank, bidx_per_rank[self.mpi_rank].size)
-        print(self.mpi_rank, n_trpl_per_bidx.size)
-        self.barrier()
         for idx, bidx in enumerate(bidx_per_rank[self.mpi_rank]):
-            b1 = bins[bidx]
 
-            num_triplets = n_trpl_per_bidx[idx] # int, telling how many good triplets in bidx
-            print(self.mpi_rank, bidx, b1, num_triplets)
-
+            num_triplets = n_trpl_per_bidx[idx]
+            triplets = self._init_triplets(bidx, num_triplets)
 
         self.barrier()
         exit()

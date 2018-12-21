@@ -484,9 +484,9 @@ def get_good_triplets(bmin, bmax, lmax, good_triplets, pmod):
     '''
 
     ret = _get_good_triplets(bmin, bmax, lmax, good_triplets, pmod)
-    if ret == -1:
-        raise ValueError('good_triplets has wrong size: {}'.format(
-            good_triplets.shape))
+    if ret != 0:
+        raise ValueError('Error: {}, good_triplets has wrong size: {}'.format(
+            ret, good_triplets.shape))
     else:
         return
 
@@ -530,7 +530,7 @@ def _get_good_triplets(bmin, bmax, lmax, good_triplets, pmod):
                 # Error checking. If input arr too small
                 # you might get seg. faults etc.
                 if ii >= input_size:
-                    return -1
+                    return -2
 
                 good_triplets[ii,0] = ell1
                 good_triplets[ii,1] = ell2
@@ -542,7 +542,7 @@ def _get_good_triplets(bmin, bmax, lmax, good_triplets, pmod):
     if ii != input_size:
         return -1
 
-    return            
+    return 0
     
 @numba.jit(nopython=True)
 def contract_bcb(B, C):
