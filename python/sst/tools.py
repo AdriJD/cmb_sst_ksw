@@ -5,6 +5,7 @@ Collection of tools used for fisher analysis
 import numpy as np
 import warnings
 import scipy.stats as ss
+import scipy.spatial.qhull as qhull
 import numba
 
 def combine(a, b, c):
@@ -543,6 +544,39 @@ def _get_good_triplets(bmin, bmax, lmax, good_triplets, pmod):
         return -1
 
     return 0
+
+def get_interp_weights(points, xi):
+    '''
+    Returns
+    -------
+    vertices : ndarray
+    weights : ndarray
+    
+    Notes
+    -----
+    Apapted from https://stackoverflow.com/questions/20915502/ .
+    '''
+
+    d = 3
+    T = qhull.Delaunay(points)
+
+    simplex = T.find_simplex(xi) # Same shape as xi. Points outside get -1.
+
+    vertices = np.take(T.simplices, simplex, axis=0)
+    temp = np.take(T.transform, simplex, axis=0)
+    delta = xi - temp[:, d]
+    bary = np.einsum('njk,nk->nj', temp[:, :d, :], delta)
+
+    weights = np.hstack((bary, 1 - bary.sum(axis=1, keepdims=True)))
+    weights[simplex == -1] *= np.nan
+
+    return vertices, weights
+
+def interpolate(values, vertices, weights):
+    '''
+
+    '''
+    return np.einsum('nj,nj->n', np.take(values, vertices), weights)
     
 @numba.jit(nopython=True)
 def contract_bcb(B, C):
@@ -557,16 +591,3 @@ def contract_bcb(B, C):
 
     return np.dot(B, np.dot(C, B))
 
-@numba.jit(nopython=True)
-def contract_bcb_loop(B, C, ii, jj):
-    
-    ans = 0.
-    for i in xrange(ii):
-        Bt = B[i]
-        Ct = C[i,:]
-        temp = 0
-        for j in xrange(jj):
-            temp += Bt * Ct[j] * B[j]
-
-        ans += temp
-    return ans

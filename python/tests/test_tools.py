@@ -268,3 +268,79 @@ class TestTools(unittest.TestCase):
         with self.assertRaises(ValueError):
             tools.get_good_triplets(bmin, bmax, lmax, good_triplets, pmod)
 
+    def test_interpolate(self):
+        
+        # 3d box
+        points = np.ones((8, 3), dtype=float)
+        points[0] = (0, 0, 0)
+        points[1] = (1, 0, 0)
+        points[2] = (1, 1, 0)
+        points[3] = (0, 1, 0)
+        points[4] = (0, 0, 1)
+        points[5] = (1, 0, 1)
+        points[6] = (1, 1, 1)
+        points[7] = (0, 1, 1)
+
+        values = np.zeros(8, dtype=float)
+        values[4:] = 1.
+
+        # Three points.
+        xi = np.ones((3, 3))
+        xi[0] = (0.5, 0.5, 0.5)
+        xi[1] = (0.5, 0.5, 0.)
+        xi[2] = (0.5, 0.5, -5.)
+
+        vertices, weights = tools.get_interp_weights(points, xi)
+        
+        ans = tools.interpolate(values, vertices, weights)
+        exp_ans = np.asarray([0.5, 0., np.nan])
+        np.testing.assert_array_equal(exp_ans, ans)
+
+    def test_interpolate2(self):
+
+        from scipy.interpolate import griddata
+        points = np.random.randn(30).reshape(10, 3)
+        values = np.random.randn(10)
+        xi = np.random.randn(15).reshape(5, 3)
+
+        vertices, weights = tools.get_interp_weights(points, xi)        
+        ans = tools.interpolate(values, vertices, weights)
+
+        exp_ans = griddata(points, values, xi, method='linear')        
+        np.testing.assert_array_almost_equal(exp_ans, ans)
+
+    def test_interpolate3(self):
+        
+        # 3d box
+        points = np.ones((8, 3), dtype=float)
+        points[0] = (0, 0, 0)
+        points[1] = (1, 0, 0)
+        points[2] = (1, 1, 0)
+        points[3] = (0, 1, 0)
+        points[4] = (0, 0, 1)
+        points[5] = (1, 0, 1)
+        points[6] = (1, 1, 1)
+        points[7] = (0, 1, 1)
+
+        values = np.zeros(8, dtype=float)
+        values[4:] = 1.
+
+        # Three points.
+        xi = np.ones((3, 3))
+        xi[0] = (0.5, 0.5, 0.5)
+        xi[1] = (0.5, 0.5, 0.)
+        xi[2] = (0.5, 0.5, -5.)
+
+        vertices, weights = tools.get_interp_weights(points, xi)
+        
+        ans = tools.interpolate(values, vertices, weights)
+        exp_ans = np.asarray([0.5, 0., np.nan])
+        np.testing.assert_array_equal(exp_ans, ans)
+
+        # New values.
+        values = np.zeros(8, dtype=float)
+        values[4:] = 2.
+
+        ans = tools.interpolate(values, vertices, weights)
+        exp_ans = np.asarray([1, 0., np.nan])
+        np.testing.assert_array_equal(exp_ans, ans)

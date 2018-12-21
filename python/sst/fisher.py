@@ -2695,7 +2695,6 @@ class Fisher(Template, PreCalc):
         
         return good_triplets
 
-
     def interp_fisher(self, invcov, ells, lmin=None, lmax=None,
                       fsky=1, verbose=True):
         '''
