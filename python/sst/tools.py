@@ -545,7 +545,7 @@ def _get_good_triplets(bmin, bmax, lmax, good_triplets, pmod):
 
     return 0
 
-def get_interp_weights(points, xi):
+def get_interp_weights(points, xi, fill_value=np.nan):
     '''
     Returns
     -------
@@ -556,8 +556,11 @@ def get_interp_weights(points, xi):
     -----
     Apapted from https://stackoverflow.com/questions/20915502/ .
     '''
-
+    # Only 3d interpolation for now.
     d = 3
+    if points.shape[1] != d or xi.shape[1] != d:
+        raise ValueError('Input shape not 3d.')
+
     T = qhull.Delaunay(points)
 
     simplex = T.find_simplex(xi) # Same shape as xi. Points outside get -1.
@@ -568,9 +571,30 @@ def get_interp_weights(points, xi):
     bary = np.einsum('njk,nk->nj', temp[:, :d, :], delta)
 
     weights = np.hstack((bary, 1 - bary.sum(axis=1, keepdims=True)))
-    weights[simplex == -1] *= np.nan
+    weights[simplex == -1] *= fill_value
 
     return vertices, weights
+
+@numba.jit(nopython=True)
+def has_nan(a):
+    '''
+    Return True if there is at least one nan value in array.
+
+    Arguments
+    ---------
+    a : array-like
+    
+    Returns
+    -------
+    has_nan : bool
+    '''
+    ret = False
+    for i in a.ravel():
+        if np.isnan(i):
+            ret = True
+            break
+
+    return ret
 
 def interpolate(values, vertices, weights):
     '''

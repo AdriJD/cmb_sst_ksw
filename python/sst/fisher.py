@@ -17,7 +17,9 @@ from scipy.integrate import trapz
 from scipy.linalg import inv
 from tools import binned_statistic
 from scipy.interpolate import CubicSpline
+from scipy.interpolate import griddata
 from scipy.signal import convolve
+from scipy.spatial import qhull
 
 import camb_tools as ct
 import tools
@@ -2659,6 +2661,8 @@ class Fisher(Template, PreCalc):
     
     def _init_triplets(self, bidx, num_triplets):
         '''
+        Return array of all good (l1,l2,l3) triplest given
+        outer bin index.
         
         Arguments
         ---------
@@ -2781,7 +2785,45 @@ class Fisher(Template, PreCalc):
         for idx, bidx in enumerate(bidx_per_rank[self.mpi_rank]):
 
             num_triplets = n_trpl_per_bidx[idx]
+            
+            if num_triplets == 0 and bidx == bins.size - 1:
+                # Last bin has no valid tuples. Just skip.
+                # Perhaps give 0 contribution to fisher?
+                continue
+
             triplets = self._init_triplets(bidx, num_triplets)
+
+            # Allocate array for interpolated bispectrum.
+            b_i = np.zeros((num_triplets, nptr))
+
+            # Compute weights, can be used for all pol triplets.
+            points = fp_per_bidx[idx]
+            xi = triplets
+            vertices, weights = tools.get_interp_weights(points, xi)
+
+            # We need to check for nans, i.e xi that lie outsize
+            # convex hull of points. Use nearest neighbor for those.
+            if tools.has_nan(weights):
+                interp_nearest = True
+                nanmask = np.isnan(weights[:,0])
+            else:
+                interp_nearest = False
+
+            for pidx, pol_triplet in enumerate(self.bispec['pol_trpl']):
+
+                # Interpolate B
+                b_c = np.ascontiguousarray(b_per_bidx[idx][:,pidx])
+                b_i_p = tools.interpolate(b_c, vertices, weights)
+                
+                if interp_nearest:
+                    # Second pass with nearest neighbour for edge values.
+                    b_i_temp = griddata(points, b_c, xi, method='nearest')
+                    b_i_p[nanmask] = b_i_temp[nanmask]
+                b_i[:,pidx] = b_i_p
+
+            # Compute Fisher information.
+#            fisher = tools.fisher_loop(b_i, invcov1, invcov2, incvov3)
+                
 
         self.barrier()
         exit()
@@ -2798,10 +2840,6 @@ class Fisher(Template, PreCalc):
         # loop over pol trplts and interpolate
         # loop over good ells and square +inv.
         
-        
-        # For good (l1,l2,l3) triplets and interpolated B resp.
-        triplets = np.zeros((max_bsize, 3), dtype=int)
-        b_interp = np.zeros((max_bsize, nptr), dtype=int)
         
         #####        
         # We can get an estimate of array size per outer bin

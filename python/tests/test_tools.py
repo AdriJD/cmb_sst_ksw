@@ -2,6 +2,8 @@ import unittest
 import numpy as np
 import os
 from sst import tools
+from scipy.interpolate import griddata
+
 
 opj = os.path.join
 
@@ -298,7 +300,6 @@ class TestTools(unittest.TestCase):
 
     def test_interpolate2(self):
 
-        from scipy.interpolate import griddata
         points = np.random.randn(30).reshape(10, 3)
         values = np.random.randn(10)
         xi = np.random.randn(15).reshape(5, 3)
@@ -344,3 +345,12 @@ class TestTools(unittest.TestCase):
         ans = tools.interpolate(values, vertices, weights)
         exp_ans = np.asarray([1, 0., np.nan])
         np.testing.assert_array_equal(exp_ans, ans)
+
+    def test_has_nan(self):
+        
+        a = np.arange(30, dtype=float)
+        self.assertFalse(tools.has_nan(a))
+        
+        a[10] = np.nan
+        
+        self.assertTrue(tools.has_nan(a))
