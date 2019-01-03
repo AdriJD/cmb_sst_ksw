@@ -64,6 +64,8 @@ def run(prim_template='equilateral', out_dir=None, camb_dir=None,
     lmax : int
     '''
 
+    tag = 'l{}'.format(lmax)
+    
     camb_opts = dict(camb_out_dir = camb_dir,
                      tag='',
                      lensed=False,
@@ -74,7 +76,7 @@ def run(prim_template='equilateral', out_dir=None, camb_dir=None,
 
     F.get_camb_output(**camb_opts)
     F.get_bins(lmin=lmin, lmax=lmax, load=True,
-                parity='odd', verbose=True)
+                parity='odd', verbose=True, tag=tag)
 
     interp_factor = 1
     radii_factor = 10
@@ -87,12 +89,22 @@ def run(prim_template='equilateral', out_dir=None, camb_dir=None,
     F.get_beta(func=prim_template, radii=radii, verbose=True, optimize=True,
                interp_factor=interp_factor, load=True, sparse=True, tag=beta_tag)
 
-    F.get_binned_bispec('equilateral', load=True)
+    F.get_binned_bispec('local', load=True, tag=tag)
 
     cls, ells = get_cls(camb_dir, lmax)
-    invcov, cov = F.get_invcov(ells, cls, return_cov=True)
-    
-    F.interp_fisher(invcov, ells, lmin=2, lmax=lmax)
+
+    invcov, cov = F.get_invcov(ells, cls, return_cov=True)    
+    f_i = F.interp_fisher(invcov, ells, lmin=2, lmax=lmax)
+    if F.mpi_rank == 0:        
+        print(f_i)
+
+    F.barrier()
+
+    b_invcov, b_cov = F.get_binned_invcov(ells, cls, return_bin_cov=True)
+
+    if F.mpi_rank == 0:
+        f_n = F.naive_fisher(b_invcov, lmin=2, lmax=lmax)
+        print(f_n)
 
 if __name__ == '__main__':
 
@@ -110,5 +122,5 @@ if __name__ == '__main__':
     camb_dir = opj(base_dir, '20180911_sst/camb_output/lensed_r0_4000')
     # camb_dir = opj(base_dir, '20171217_sst/camb_output/high_acy/sparse_5000')
 
-    run(out_dir=out_dir, camb_dir=camb_dir, lmax=400)
+    run(out_dir=out_dir, camb_dir=camb_dir, lmax=300)
 

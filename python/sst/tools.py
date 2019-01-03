@@ -340,6 +340,46 @@ def rank_bins(bins, n_per_ell, ells):
     
     return bidx_sorted, n_per_bin
 
+def distribute_bins_simple(bidx_sorted, n_per_bin, size):
+    '''
+    Find roughly optimal bin indices per MPI rank based on
+    uniformity in "n".
+    
+    Arguments
+    ---------
+    bidx_sorted
+        Index array such that bins[bidx_sorted] is in increasing order
+        of n_per_bin.
+    n_per_bin
+        Number per bin (in same order as bins).
+    size : int
+        Number of MPI ranks.
+
+    Returns
+    -------
+    bidx_per_rank : list of ndarrays
+        Bin indices per rank. Shape=(size, nbins)    
+    '''
+
+    n_per_bin_sorted = n_per_bin[bidx_sorted] # Smallest first.
+    n_per_bin_sorted = n_per_bin_sorted[::-1] # Largest first
+    cum_n_sorted = n_per_bin_sorted.cumsum() / float(n_per_bin_sorted.sum())
+    idx = np.searchsorted(cum_n_sorted, 
+                          np.linspace(0, 1, size, endpoint=False)[1:])
+
+    bidx_per_rank = np.array_split(bidx_sorted[::-1], idx + 1)
+
+    # Check if flattened bidx per rank has all possible bidx.
+    check = [item for sublist in bidx_per_rank for item in sublist]
+    check = np.asarray(check)
+    num_bins = n_per_bin_sorted.size
+    if not np.array_equal(np.unique(check), np.arange(num_bins)):
+        print(np.unique(check))
+        print(np.arange(num_bins))
+        raise ValueError('bins not distributed right')
+
+    return bidx_per_rank
+
 def distribute_bins(bidx_sorted, n_per_bin, size, tol=0.1):
     '''
     Find roughly optimal bin indices per MPI rank based on
@@ -348,7 +388,8 @@ def distribute_bins(bidx_sorted, n_per_bin, size, tol=0.1):
     Arguments
     ---------
     bidx_sorted
-        Index array such that bins[bidx_sorted] is in increasing order.
+        Index array such that bins[bidx_sorted] is in increasing order
+        of n_per_bin.
     n_per_bin
         Number per bin (in original order).
     size : int
@@ -388,7 +429,7 @@ def distribute_bins(bidx_sorted, n_per_bin, size, tol=0.1):
     ii = 0
     while bins_left:
         
-        # Because I hate while loops.
+        # Stop while loop because something clearly went wrong.
         ii += 1
         if ii > 1000:
             raise ValueError('Cannot find bin distribution')
@@ -462,10 +503,13 @@ def distribute_bins(bidx_sorted, n_per_bin, size, tol=0.1):
     for i in xrange(len(bidx_per_rank)):
         check.append(bidx_per_rank[i])
         bidx_per_rank[i] = np.asarray(bidx_per_rank[i], dtype=int)
-    check = [item for sublist in check for item in sublist]
 
+    # Check if flattened bidx per rank has all possible bidx.
+    check = [item for sublist in check for item in sublist]
     check = np.asarray(check)
     if not np.array_equal(np.unique(check), np.arange(num_bins)):
+        print(np.unique(check))
+        print(np.arange(num_bins))
         raise ValueError('bins not distributed right')
 
     return bidx_per_rank
@@ -545,6 +589,27 @@ def _get_good_triplets(bmin, bmax, lmax, good_triplets, pmod):
 
     return 0
 
+@numba.jit(nopython=True)
+def has_nan(a):
+    '''
+    Return True if there is at least one nan value in array.
+
+    Arguments
+    ---------
+    a : array-like
+    
+    Returns
+    -------
+    has_nan : bool
+    '''
+    ret = False
+    for i in a.ravel():
+        if np.isnan(i):
+            ret = True
+            break
+
+    return ret
+
 def get_interp_weights(points, xi, fill_value=np.nan):
     '''
     Returns
@@ -575,30 +640,10 @@ def get_interp_weights(points, xi, fill_value=np.nan):
 
     return vertices, weights
 
-@numba.jit(nopython=True)
-def has_nan(a):
-    '''
-    Return True if there is at least one nan value in array.
-
-    Arguments
-    ---------
-    a : array-like
-    
-    Returns
-    -------
-    has_nan : bool
-    '''
-    ret = False
-    for i in a.ravel():
-        if np.isnan(i):
-            ret = True
-            break
-
-    return ret
-
 def interpolate(values, vertices, weights):
     '''
-
+    Take vertices and weigths computed by `get_interp_weights`
+    and do the actual interpolation.
     '''
     return np.einsum('nj,nj->n', np.take(values, vertices), weights)
     
@@ -614,4 +659,129 @@ def contract_bcb(B, C):
     '''
 
     return np.dot(B, np.dot(C, B))
+
+@numba.jit(nopython=True)
+def one_over_delta(ell1, ell2, ell3):
+    '''
+    Return factor 1/Delta_{l1,l2,l3}.
+
+    Arguments
+    ---------
+    ell1 : int
+    ell2 : int
+    ell3 : int
+    
+    Returns
+    -------
+    one_over_delta : float
+    '''
+
+    if ell1 == ell2 == ell3:
+        return 0.16666666666666666
+
+    if ell1 != ell2 != ell3:
+        return 1.
+
+    return 0.5
+
+
+def fisher_loop(bispec, triplets, ic1, ic2, ic3, lmin, lmax):
+    '''
+
+    '''
+    # Do some sanity checks before passing to numba.
+
+    if ic1.shape != ic2.shape != ic3.shape:
+        raise ValueError('')
+    if bispec.shape[1] != ic1.shape[1]:
+        raise ValueError('')
+    if bispec.shape[0] != triplets.shape[0]:
+        raise ValueError('')
+    
+    if ic1.shape[0] != (lmax - lmin) + 1:
+        raise ValueError
+
+    return _fisher_loop(bispec, triplets, ic1, ic2, ic3, lmin)
+    
+@numba.jit(nopython=True)
+def _fisher_loop(bispec, triplets, ic1, ic2, ic3, lmin):
+    '''
+    
+    Arguments
+    ---------
+    bispec : array-like
+        Shape (K, L)
+    triplets : array-like
+        Shape (K, 3)
+    ic1 : array-like
+        Shape (M, L, L)
+    ic2 : array-like
+        Shape (M, L, L)
+    ic3 : array-like
+        Shape (M, L, L)
+    lmin : int
+        Lowest multipole in inv. cov. arrays.
+
+    Returns
+    -------
+    fisher : int
+
+    Notes
+    -----
+    All arrays should be in c-order.
+
+    K : number of (l1, l2, l3) triplets
+    L : number of polarization triplets
+    M : number of multipoles.
+    '''
+
+    num_triplets = triplets.shape[0]
+
+    lidx1_old = -10
+    lidx2_old = -10
+
+    fisher = 0
+
+    for ii in xrange(num_triplets):
+                
+        l1, l2, l3 = triplets[ii] 
+
+        lidx1 = l1 - lmin
+        lidx2 = l2 - lmin
+        lidx3 = l3 - lmin
+        
+        b123 = bispec[ii]
+
+#        if lidx1 != lidx1_old:
+#            # New l1, update inv. covariance matrix.
+#            ic1_t = ic1[lidx1]
+#            lidx1_old = lidx1
+#            update = True
+
+#        if update:
+#            # If new l1, redo ic1 * ic2.
+#            ic12_t = ic1_t 
+#            ic12_t *= ic2[lidx2]
+#            lidx2_old = lidx2      
+#            # Reset
+#            update = False
+
+#        elif lidx2 != lidx2_old:
+#            # Same l1, but new l2.
+#            ic12_t = ic1_t 
+#            ic12_t *= ic2[lidx2]
+#            lidx2_old = lidx2            
+
+#        ic123_t = ic12_t
+#        ic123_t *= ic3[lidx3]
+
+        ic123_t = ic1[lidx1] * ic2[lidx2] * ic3[lidx3]
+
+        f = contract_bcb(b123, ic123_t)
+        f *= one_over_delta(l1, l2, l3)
+
+        fisher += f
+        
+    return fisher
+
 

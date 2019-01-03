@@ -89,6 +89,60 @@ class TestTools(unittest.TestCase):
         np.testing.assert_array_equal(n_per_bin[bidx_sorted],
                                       exp_n_order)
 
+    def test_distribute_bins_simple(self):
+        
+        size = 3
+        # An index array to bins that sorts 
+        # n_per_bin from low to high values.
+        bidx_sorted = np.asarray([4,1,2,3,0], dtype=int)
+        n_per_bin = np.asarray([10, 7, 8, 9, 6])
+        bidx_per_rank = tools.distribute_bins_simple(
+            bidx_sorted, n_per_bin, size=size)
+
+        exp_rank0 = np.asarray([0, 3]) # 19
+        exp_rank1 = np.asarray([2]) # 8
+        exp_rank2 = np.asarray([1, 4]) # 13
+        np.testing.assert_array_equal(bidx_per_rank[0], exp_rank0)
+        np.testing.assert_array_equal(bidx_per_rank[1], exp_rank1)
+        np.testing.assert_array_equal(bidx_per_rank[2], exp_rank2)
+
+    def test_distribute_bins_simple2(self):
+        
+        size = 6
+        bidx_sorted = np.asarray([4,1,2,3,0], dtype=int)
+        n_per_bin = np.asarray([10, 7, 8, 9, 6])
+        bidx_per_rank = tools.distribute_bins_simple(
+            bidx_sorted, n_per_bin, size=size)
+
+        exp_rank0 = np.asarray([0]) # 10
+        exp_rank1 = np.asarray([3]) # 9
+        exp_rank2 = np.asarray([2]) # 8
+        exp_rank3 = np.asarray([]) # -
+        exp_rank4 = np.asarray([1]) # 7
+        exp_rank5 = np.asarray([4]) # 6
+
+        np.testing.assert_array_equal(bidx_per_rank[0], exp_rank0)
+        np.testing.assert_array_equal(bidx_per_rank[1], exp_rank1)
+        np.testing.assert_array_equal(bidx_per_rank[2], exp_rank2)
+        np.testing.assert_array_equal(bidx_per_rank[3], exp_rank3)
+        np.testing.assert_array_equal(bidx_per_rank[4], exp_rank4)
+        np.testing.assert_array_equal(bidx_per_rank[5], exp_rank5)
+
+    def test_distribute_bins_simple3(self):
+        
+        size = 3
+        n_per_bin = np.asarray([1, 1, 1, 10, 10, 10, 10, 10, 10, 25, 30, 30])
+        bidx_sorted = np.arange(n_per_bin.size)
+        bidx_per_rank = tools.distribute_bins_simple(
+            bidx_sorted, n_per_bin, size=size)
+
+        exp_rank0 = np.asarray([11, 10]) # 60
+        exp_rank1 = np.asarray([9, 8, 7]) # 45
+        exp_rank2 = np.asarray([6, 5, 4, 3, 2, 1, 0]) # 53
+        np.testing.assert_array_equal(bidx_per_rank[0], exp_rank0)
+        np.testing.assert_array_equal(bidx_per_rank[1], exp_rank1)
+        np.testing.assert_array_equal(bidx_per_rank[2], exp_rank2)
+
     def test_distribute_bins(self):
 
         # An index array to bins that sorts 
@@ -170,7 +224,6 @@ class TestTools(unittest.TestCase):
 
         exp_arr = np.asarray([]) # Rank 5.
         np.testing.assert_array_equal(bidx_per_rank[5], exp_arr)
-
 
     def test_distribute_bins5(self):
 
@@ -259,7 +312,6 @@ class TestTools(unittest.TestCase):
 
         # Give a too large array, should crash.
         good_triplets = np.zeros((9, 3), dtype=int)
-
 
         with self.assertRaises(ValueError):
             tools.get_good_triplets(bmin, bmax, lmax, good_triplets, pmod)
@@ -354,3 +406,110 @@ class TestTools(unittest.TestCase):
         a[10] = np.nan
         
         self.assertTrue(tools.has_nan(a))
+
+    def test_one_over_delta(self):
+        
+        self.assertTrue(tools.one_over_delta(1, 2, 3) == 1.)
+        self.assertTrue(tools.one_over_delta(2, 2, 2) == 1/6.)
+        self.assertTrue(tools.one_over_delta(1, 1, 2) == 0.5)
+
+    def test_contract_bcb(self):
+        
+        B = np.arange(12, dtype=float)
+        C = np.arange(144, dtype=float).reshape(12, 12)
+
+        ans = tools.contract_bcb(B, C)
+        exp_ans = np.einsum("i,ij,j", B, C, B)
+
+        self.assertEqual(ans, exp_ans)
+
+    def test_fisher_loop(self):
+        
+        bispec = np.ones((1, 2))
+        triplets = np.asarray([[2, 2, 3]])
+        lmin = 2
+        ic1 = np.ones((2, 2, 2))
+        ic2 = np.ones((2, 2, 2))
+        ic3 = np.ones((2, 2, 2))
+
+        f = tools._fisher_loop(bispec, triplets, ic1, ic2, ic3, lmin)
+        exp_ans = 2
+        self.assertEqual(exp_ans, f)
+
+    def test_fisher_loop2(self):
+        
+        bispec = np.ones((4, 2))
+        triplets = np.asarray([[2, 2, 3], [2, 3, 4], [2, 4, 5], [3, 3, 3]])
+        lmin = 2
+        ic1 = np.ones((4, 2, 2))
+        ic2 = np.ones((4, 2, 2))
+        ic3 = np.ones((4, 2, 2))
+
+        f = tools._fisher_loop(bispec, triplets, ic1, ic2, ic3, lmin)
+        exp_ans = 10.666666666666666
+        self.assertEqual(exp_ans, f)
+
+    def test_fisher_loop3(self):
+        
+        bispec = np.ones((4, 2))
+        triplets = np.asarray([[2, 2, 3], [2, 3, 4], [2, 4, 5], [3, 3, 3]])
+        lmin = 2
+        ic1 = np.ones((4, 2, 2))
+        ic2 = np.ones((4, 2, 2))
+        ic3 = np.ones((4, 2, 2))
+
+        ic1 *= 2
+
+        f = tools._fisher_loop(bispec, triplets, ic1, ic2, ic3, lmin)
+        exp_ans = 21.333333333333333
+        self.assertEqual(exp_ans, f)
+
+    def test_fisher_loop4(self):
+        
+        bispec = np.ones((1, 2))
+        triplets = np.asarray([[2, 3, 4]])
+        lmin = 2
+        ic1 = np.ones((4, 2, 2))
+        ic2 = np.ones((4, 2, 2))
+        ic3 = np.ones((4, 2, 2))
+
+        ic1 *= 2
+        ic3 *= 2
+
+        f = tools._fisher_loop(bispec, triplets, ic1, ic2, ic3, lmin)
+        exp_ans = 16
+        self.assertEqual(exp_ans, f)
+
+    def test_fisher_loop5(self):
+        
+        bispec = np.ones((1, 2))
+        triplets = np.asarray([[2, 3, 4]])
+        lmin = 2
+        ic1 = np.ones((4, 2, 2))
+        ic2 = np.ones((4, 2, 2))
+        ic3 = np.ones((4, 2, 2))
+
+        ic1 *= 2
+        ic2 *= 2
+        ic3 *= 2
+
+        f = tools._fisher_loop(bispec, triplets, ic1, ic2, ic3, lmin)
+        exp_ans = 32
+        self.assertEqual(exp_ans, f)
+
+    def test_fisher_loop6(self):
+        
+        bispec = np.ones((2, 2))
+        triplets = np.asarray([[2, 2, 2], [2, 3, 4]])
+        lmin = 2
+        ic1 = np.ones((4, 2, 2))
+        ic2 = np.ones((4, 2, 2))
+        ic3 = np.ones((4, 2, 2))
+
+        ic1 *= 2
+        ic2 *= 2
+        ic3 *= 2
+
+        f = tools._fisher_loop(bispec, triplets, ic1, ic2, ic3, lmin)
+        exp_ans = 37.333333333333333
+        self.assertEqual(exp_ans, f)

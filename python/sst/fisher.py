@@ -1817,7 +1817,7 @@ class Fisher(Template, PreCalc):
                         # Multiply by num (note, already floats)
                         # Note that for plotting purposes, you need to remove
                         # the num factor again
-                        bispec *= float(num)
+                        #bispec *= float(num)
 
                         bispectrum[idxb,idx2,idx3,pidx] = bispec
 
@@ -2313,7 +2313,8 @@ class Fisher(Template, PreCalc):
             Multipoles corresponding to nls.
         nls : array-like
             Total covariance Nl, Cl or Nl + Cl. Shape: (6, ells.size)
-            in order: TT, EE, BB, TE, TB, EB
+            in order: TT, EE, BB, TE, TB, EB. If shape is (4, ells.size),
+            assume TB and EB are zero.
 
         Keyword Arguments
         -----------------
@@ -2346,6 +2347,10 @@ class Fisher(Template, PreCalc):
         bin_cov = np.ones((bins.size, 3, 3))
         bin_cov *= np.nan
         bin_invcov = bin_cov.copy()
+
+        if nls.shape[0] == 4:
+            # Assume TB and EB are zero with ell.
+            nls = np.vstack([nls, np.zeros((2, ells.size), dtype=float)])
 
         nls_dict = {'TT': 0, 'EE': 1, 'BB': 2, 'TE': 3,
                     'ET': 3, 'BT': 4, 'TB': 4, 'EB': 5,
@@ -2505,9 +2510,10 @@ class Fisher(Template, PreCalc):
 
                     f = np.einsum("i,ij,j", B, cl123, B)
 
-                    # both B's have num 
-                    f /= float(num)
-
+                    ## both B's have num 
+                    #f /= float(num)
+                    f *= num
+                    
                     # Delta_l1l2l3.
                     if i1 == i2 == i3:
                         f /= 6.
@@ -2735,6 +2741,10 @@ class Fisher(Template, PreCalc):
         parity = self.bins['parity']        
         nptr = self.bispec['pol_trpl'].shape[0]
 
+        # Change invcov to K to avoid overflow errors.
+        invcov = invcov.copy()
+        invcov *= 1e-12
+        
         # Check input.
         if ells.size != invcov.shape[0]:
             raise ValueError(
@@ -2755,6 +2765,8 @@ class Fisher(Template, PreCalc):
                 lmax, ells[-1]))
 
         invcov1, invcov2, invcov3 = self._init_fisher_invcov(invcov)
+        lmin_c = ells[0]
+        lmax_c = ells[-1]
 
         if self.mpi_rank == 0:
             # Decide how to distribute load over MPI ranks.
@@ -2764,7 +2776,7 @@ class Fisher(Template, PreCalc):
             bidx_sorted, n_per_bin = tools.rank_bins(
                 bins, sizes_bispec, ells_fisher)
 
-            bidx_per_rank = tools.distribute_bins(bidx_sorted,
+            bidx_per_rank = tools.distribute_bins_simple(bidx_sorted,
                                       n_per_bin, self.mpi_size)
         else:
             bidx_per_rank = None
@@ -2782,6 +2794,7 @@ class Fisher(Template, PreCalc):
         fp_per_bidx, b_per_bidx, n_trpl_per_bidx = self._mpi_scatter_for_fisher(
             bidx_per_rank)
         
+        fisher_on_rank = 0
         for idx, bidx in enumerate(bidx_per_rank[self.mpi_rank]):
 
             num_triplets = n_trpl_per_bidx[idx]
@@ -2794,7 +2807,7 @@ class Fisher(Template, PreCalc):
             triplets = self._init_triplets(bidx, num_triplets)
 
             # Allocate array for interpolated bispectrum.
-            b_i = np.zeros((num_triplets, nptr))
+            b_i = np.zeros((num_triplets, nptr), dtype=float)
 
             # Compute weights, can be used for all pol triplets.
             points = fp_per_bidx[idx]
@@ -2822,99 +2835,15 @@ class Fisher(Template, PreCalc):
                 b_i[:,pidx] = b_i_p
 
             # Compute Fisher information.
-#            fisher = tools.fisher_loop(b_i, invcov1, invcov2, incvov3)
-                
+            fisher = tools.fisher_loop(b_i, triplets, 
+                                       invcov1, invcov2, invcov3,
+                                       lmin_c, lmax_c)
+            fisher *= 1e36 # Converting invcov back from K to uK
+            fisher *= fsky
+            fisher *= self.common_amp ** 2 # (16 pi^4 As^2)^2
+            fisher_on_rank += fisher
 
+        fisher = self._comm.allreduce(fisher_on_rank)
         self.barrier()
-        exit()
-#            max_bsize = sizes_bispec.max()
-#            if parity == 'odd' or parity == 'even':
-#                max_bsize = int(max_bsize / 2.)
-#            else:
-#                max_bsize = int(max_bsize)
-
-        #[for bin in subset of bins
-        # determine good ells
-        # flatten first_pass 
-        # get first part of interpolation
-        # loop over pol trplts and interpolate
-        # loop over good ells and square +inv.
-        
-        
-        #####        
-        # We can get an estimate of array size per outer bin
-        # i.e. sizes_bispec * binwidth
-        # here you can optimze the number of bins per rank
-        # given some sort of max number of computations per rank
-        # (or just use largest bin as "unit") probably tiny overhead
-        
-
-        ## use num_pass to get nonzero elements in B for outer bin
-        ## create big empty array nl1, * nl2, nl3 /2 or something
-
-
-        ## outer loop ##
-        ## pick start and end of bin
-        ## loop over ells in outer bin and populte empty array with 
-        ## all valid tuples
-        ## use that (truncated) array and earlier array in griddata
-        ## repeat for each polidx
-        ## loop over result and do inverse cov for each item
-        ## prob put if B[idx] = 0 skip.
-        ## that's it I think.
-
-
-        fisher = 0
-
-        # allocate 12 x 12 cov for use in inner loop
-        cl123 = np.zeros((nptr, nptr), dtype=float)
-
-        # Depending on lmin, start outer loop not at first bin.
-        start_bidx = np.where(bins >= lmin)[0][0]
-        # Depending on lmax, possibly end loops earlier.
-        end_bidx = np.where(bins >= min(lmax, bins[-1]))[0][0] + 1
-
-        # loop same loop as in binned_bispectrum
-        for idx1, i1 in enumerate(bins[start_bidx:end_bidx]):
-            idx1 += start_bidx
-            cl1 = invcov1[idx1,:,:] # nptr x nptr matrix.
-
-            for idx2, i2 in enumerate(bins[idx1:end_bidx]):
-                idx2 += idx1
-                cl2 = invcov2[idx1,:,:] # nptr x nptr matrix.
-
-                cl12 = cl1 * cl2
-
-                for idx3, i3 in enumerate(bins[idx2:end_bidx]):
-                    idx3 += idx2
-
-                    num = num_pass[idx1,idx2,idx3]
-                    if num == 0:
-                        continue
-
-                    cl123[:] = cl12 # Copy.
-                    cl123 *= invcov3[idx3,:,:] # nptr x nptr matrix.
-
-                    B = bispec[idx1,idx2,idx3,:]
-
-                    f = np.einsum("i,ij,j", B, cl123, B)
-
-                    # both B's have num 
-                    f /= float(num)
-
-                    # Delta_l1l2l3.
-                    if i1 == i2 == i3:
-                        f /= 6.
-                    elif i1 != i2 != i3:
-                        pass
-                    else:
-                        f /= 2.
-
-                    fisher += f
-
-        fisher *= fsky
-        fisher *= self.common_amp ** 2 # (16 pi^4 As^2)^2
 
         return fisher
-
-
