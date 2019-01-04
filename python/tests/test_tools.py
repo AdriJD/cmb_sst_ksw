@@ -352,6 +352,7 @@ class TestTools(unittest.TestCase):
 
     def test_interpolate2(self):
 
+        # Test if my function agrees with scipy griddata.
         points = np.random.randn(30).reshape(10, 3)
         values = np.random.randn(10)
         xi = np.random.randn(15).reshape(5, 3)
@@ -415,6 +416,19 @@ class TestTools(unittest.TestCase):
         ans = tools.interpolate(values, vertices, weights).shape
         self.assertEqual(ans, exp_shape)
 
+    def test_interpolate5(self):
+
+        # Test if values on input points are unchanged.
+        points = np.random.randn(30).reshape(10, 3)
+        values = np.random.randn(10)
+        xi = points
+
+        vertices, weights = tools.get_interp_weights(points, xi)        
+        
+        ans = tools.interpolate(values, vertices, weights)
+        
+        np.testing.assert_array_almost_equal(ans, values, decimal=7)
+        
     def test_has_nan(self):
         
         a = np.arange(30, dtype=float)

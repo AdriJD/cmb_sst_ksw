@@ -414,7 +414,7 @@ class PreCalc(MPIBase):
             Consider tuples in ell that are parity "odd"
             or "even". If None, use both. (default : "odd")
         verbose : bool, int
-            If True or integer print stuff.
+            If True or integer, print stuff.
 
         Notes
         -----
@@ -2551,7 +2551,7 @@ class Fisher(Template, PreCalc):
 
         Notes
         -----
-        M = sum(num_pass[bin,...].astype(bool)) (i.e. num_tuples)
+        M = sum(num_pass[outer_bins,...].astype(bool)) (i.e. num_tuples)
         '''
         
         size = self.mpi_size
@@ -2685,6 +2685,107 @@ class Fisher(Template, PreCalc):
         
         return good_triplets
 
+    def get_bispec_slice(self, ell):
+        '''
+        Return interpolated B_{ell,...} slice.
+
+        Arguments
+        ---------
+        ell : int
+            Outer multipole
+
+        Returns
+        -------
+        slice : ndarray
+            Shape = (M, nptrls)
+        '''
+        pass
+
+    def _interp_b(self, triplets, fp_for_bidx, b_for_bidx):
+        '''
+        Use linear interpolation to interpolate bispectrum
+        onto array of (l1, l2, l3) triplets.
+
+        Arguments
+        ---------
+        triplets : ndarray
+            (l1,l2,l3) triplets, shape : (N, 3).
+        fp_for_bidx : ndarray
+            first_pass array, shape = (M, 3).
+        b_for_bidx : ndarray
+            Bispectrum, shape = (M, nptr).
+        
+        Returns
+        -------
+        b_i : ndarray
+            Interpolated bispectrum, shape (N, nptr).
+        nb_frac : float
+            Fraction of points obtained by nearest-neighbor interpolation.
+        qh_exit : bool
+            Whether or not Qhull exited normally.
+
+        Notes
+        -----
+        Nearest-neighbor interpolation is used for triplets
+        outside convex hull of provided samples.
+        '''
+
+        num_triplets = triplets.shape[0]
+        pol_triplets = self.bispec['pol_trpl']
+        nptr = pol_triplets.shape[0]
+
+        # Allocate array for interpolated bispectrum.
+        b_i = np.zeros((num_triplets, nptr), dtype=float)
+
+        # Compute weights, can be used for all pol triplets.
+        points = fp_for_bidx
+        xi = triplets
+        qh_exit = True
+        try:
+            vertices, weights = tools.get_interp_weights(points, xi, 
+                                                   fill_value=np.nan)
+        except qhull.QhullError as e:
+
+            if 'QH6154' in str(e):
+                # Expected Qhull error for last bin in cases where
+                # lmax is smaller than the first bin with width > 1.
+                weights = np.ones((xi.shape[0], 4), dtype=float) 
+                vertices = np.ones((xi.shape[0], 4), dtype=int) 
+                weights *= np.nan # I.e. use nearest-neighbor for all.
+                qh_exit = False
+            else:
+                # Some other Qhull error that is unexpected.
+                raise
+
+        # We need to check for nans, i.e xi that lie outsize
+        # convex hull of points. Use nearest neighbor for those.
+        if tools.has_nan(weights):
+            interp_nearest = True
+            nanmask = np.isnan(weights[:,0])
+        else:
+            interp_nearest = False
+
+        nb_frac = 0.
+        for pidx, pol_triplet in enumerate(pol_triplets):
+
+            # Interpolate B
+            b_c = np.ascontiguousarray(b_for_bidx[:,pidx])
+            b_i_p = tools.interpolate(b_c, vertices, weights)
+
+            if interp_nearest:
+                # Second pass with nearest neighbour for edge values.
+                b_i_temp = griddata(points, b_c, xi, method='nearest')
+                b_i_p[nanmask] = b_i_temp[nanmask]
+
+                if pidx == 0:
+                    # Add number of NB interpolated points,
+                    # (it is the same for all pol_triplets).
+                    nb_frac += np.sum(nanmask) / float(nanmask.size)
+
+            b_i[:,pidx] = b_i_p
+
+        return b_i, nb_frac, qh_exit
+
     def interp_fisher(self, invcov, ells, lmin=None, lmax=None,
                       fsky=1, verbose=True):
         '''
@@ -2710,6 +2811,9 @@ class Fisher(Template, PreCalc):
         fsky : float
             Fraction of sky assumed to be used.
             (default : 1)
+        verbose : bool, int
+            If True or integer, print stuff.
+
 
         Returns
         -------
@@ -2725,8 +2829,6 @@ class Fisher(Template, PreCalc):
         invcov = invcov.copy()
         invcov *= 1e-12
         
-        fv = np.nan # Fill value.
-
         # Check input.
         if ells.size != invcov.shape[0]:
             raise ValueError(
@@ -2788,44 +2890,18 @@ class Fisher(Template, PreCalc):
 
             triplets = self._init_triplets(bidx, num_triplets)
 
-            # Allocate array for interpolated bispectrum.
-            b_i = np.zeros((num_triplets, nptr), dtype=float)
+            b_i, nb_frac, qh_exit = self._interp_b(triplets, 
+                            fp_per_bidx[idx], b_per_bidx[idx])
 
-            # Compute weights, can be used for all pol triplets.
-            points = fp_per_bidx[idx]
-            xi = triplets
-            try:
-                vertices, weights = tools.get_interp_weights(points, xi, 
-                                                             fill_value=fv)
-            except qhull.QhullError:
+            if not qh_exit and verbose:
                 print('[rank {:03d}]: Completely switching to nearest-neighbor'
-                      ' interpolation for bidx {}, (bin = {}, lmax = {}'.format(
+                      ' interpolation for bidx {}, (bin = {}, lmax = {})'.format(
                           rank, bidx, bins[bidx], lmax))
-
-                weights = np.ones((xi.shape[0], 4), dtype=float) # Known shape.
-                vertices = np.ones((xi.shape[0], 4), dtype=int) 
-                weights *= fv # I.e. use nearest-neighbor for all.
-
-            # We need to check for nans, i.e xi that lie outsize
-            # convex hull of points. Use nearest neighbor for those.
-            if tools.has_nan(weights):
-                interp_nearest = True
-                nanmask = np.isnan(weights[:,0])
-            else:
-                interp_nearest = False
-
-            for pidx, pol_triplet in enumerate(self.bispec['pol_trpl']):
-
-                # Interpolate B
-                b_c = np.ascontiguousarray(b_per_bidx[idx][:,pidx])
-                b_i_p = tools.interpolate(b_c, vertices, weights)
+            if verbose == 2:
+                print('[rank {:03d}]: Used nearest-neighbor for {:.2f}% '
+                      'of triplets for bidx {}, (bin = {}, lmax = {})'.format(
+                          rank, nb_frac * 100, bidx, bins[bidx], lmax))
                 
-                if interp_nearest:
-                    # Second pass with nearest neighbour for edge values.
-                    b_i_temp = griddata(points, b_c, xi, method='nearest')
-                    b_i_p[nanmask] = b_i_temp[nanmask]
-                b_i[:,pidx] = b_i_p
-
             # Compute Fisher information.
             fisher = tools.fisher_loop(b_i, triplets, 
                                        invcov1, invcov2, invcov3,
