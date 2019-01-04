@@ -2725,6 +2725,8 @@ class Fisher(Template, PreCalc):
         invcov = invcov.copy()
         invcov *= 1e-12
         
+        fv = np.nan # Fill value.
+
         # Check input.
         if ells.size != invcov.shape[0]:
             raise ValueError(
@@ -2792,7 +2794,17 @@ class Fisher(Template, PreCalc):
             # Compute weights, can be used for all pol triplets.
             points = fp_per_bidx[idx]
             xi = triplets
-            vertices, weights = tools.get_interp_weights(points, xi)
+            try:
+                vertices, weights = tools.get_interp_weights(points, xi, 
+                                                             fill_value=fv)
+            except qhull.QhullError:
+                print('[rank {:03d}]: Completely switching to nearest-neighbor'
+                      ' interpolation for bidx {}, (bin = {}, lmax = {}'.format(
+                          rank, bidx, bins[bidx], lmax))
+
+                weights = np.ones((xi.shape[0], 4), dtype=float) # Known shape.
+                vertices = np.ones((xi.shape[0], 4), dtype=int) 
+                weights *= fv # I.e. use nearest-neighbor for all.
 
             # We need to check for nans, i.e xi that lie outsize
             # convex hull of points. Use nearest neighbor for those.

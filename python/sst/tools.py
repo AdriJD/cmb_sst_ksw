@@ -657,14 +657,32 @@ def has_nan(a):
 
 def get_interp_weights(points, xi, fill_value=np.nan):
     '''
+    Compute vertices and weights for 3D linear interpolation.
+
+    Arguments
+    ---------
+    points : ndarray
+        Coordinates of known points, shape = (N, 3).
+    xi : ndarray
+        Coordinates of points to be interpolated,
+        shape = (M, 3).
+    
+    Keyword Arguments
+    -----------------
+    fill_value : scalar
+        Value used in output `weights` array for invalid
+        points (outside convex hull).
+        
     Returns
     -------
     vertices : ndarray
+        Shape = (M, 4).
     weights : ndarray
+        Shape (M, 4). 
     
     Notes
     -----
-    Apapted from https://stackoverflow.com/questions/20915502/ .
+    Adapted from https://stackoverflow.com/questions/20915502/ .
     '''
     # Only 3d interpolation for now.
     d = 3
@@ -689,7 +707,23 @@ def interpolate(values, vertices, weights):
     '''
     Take vertices and weigths computed by `get_interp_weights`
     and do the actual interpolation.
+
+    Arguments
+    ---------
+    values : ndarray
+        Values corresponding to known points used in 
+        `get_interp_weights`. Shape = N.
+    vertices : ndarray
+        Shape = (M, 4).
+    weights : ndarray
+        Shape (M, 4).
+
+    Returns
+    -------
+    interp_vals : ndarray
+        Values of interpolated points, shape = (M).    
     '''
+
     return np.einsum('nj,nj->n', np.take(values, vertices), weights)
     
 @numba.jit(nopython=True)

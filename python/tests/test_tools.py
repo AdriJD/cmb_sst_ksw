@@ -398,6 +398,23 @@ class TestTools(unittest.TestCase):
         exp_ans = np.asarray([1, 0., np.nan])
         np.testing.assert_array_equal(exp_ans, ans)
 
+    def test_interpolate4(self):
+
+        # Testing output shapes
+        points = np.random.randn(30).reshape(10, 3)
+        values = np.random.randn(10)
+        xi = np.random.randn(15).reshape(5, 3)
+
+        vertices, weights = tools.get_interp_weights(points, xi)        
+        
+        exp_shape = (5, 4) # i.e. 4 numbers per xi point.
+        self.assertEqual(weights.shape, exp_shape)
+        self.assertEqual(vertices.shape, exp_shape)
+
+        exp_shape = (5,) # i.e. 4 numbers per xi point.
+        ans = tools.interpolate(values, vertices, weights).shape
+        self.assertEqual(ans, exp_shape)
+
     def test_has_nan(self):
         
         a = np.arange(30, dtype=float)
