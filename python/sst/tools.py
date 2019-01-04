@@ -589,6 +589,51 @@ def _get_good_triplets(bmin, bmax, lmax, good_triplets, pmod):
 
     return 0
 
+def get_slice(bidx, num_bins):
+    '''
+    Return start and stop indices for outer 
+    bispectrum bin such that slice spans 
+    spans one bin before and after bidx bin
+    (for interpolation).
+
+    Arguments
+    ---------
+    bidx : int
+        Bin index
+    num_bins : int
+        Number of (outer) bins.
+
+    Returns
+    -------
+    b_start : int
+        Start index.
+    b_stop : int
+        Stop index.
+    '''
+
+    if bidx < 0:
+        raise ValueError("bidx ({}) < 0 ".format(bidx))
+    if bidx >= num_bins:
+        raise ValueError("bidx ({}) larger than num_bins ({})".
+                         format(bidx, num_bins))
+    if num_bins <= 0:
+        raise ValueError("num_bins ({}) <= 0 ".
+                         format(num_bins))
+
+    if bidx == 0:
+        # First bin, only give second bin.
+        b_start = bidx
+        b_stop = bidx + 2
+    elif bidx == num_bins - 1:
+        # Last bin, only give second-to-last bin.
+        b_start = bidx - 1
+        b_stop = bidx + 1
+    else:
+        b_start = bidx - 1
+        b_stop = bidx + 2
+
+    return b_start, b_stop
+
 @numba.jit(nopython=True)
 def has_nan(a):
     '''
@@ -686,10 +731,7 @@ def one_over_delta(ell1, ell2, ell3):
 
 
 def fisher_loop(bispec, triplets, ic1, ic2, ic3, lmin, lmax):
-    '''
-
-    '''
-    # Do some sanity checks before passing to numba.
+    '''Do some sanity checks before passing to numba.'''
 
     if ic1.shape != ic2.shape != ic3.shape:
         raise ValueError('')

@@ -513,3 +513,45 @@ class TestTools(unittest.TestCase):
         f = tools._fisher_loop(bispec, triplets, ic1, ic2, ic3, lmin)
         exp_ans = 37.333333333333333
         self.assertEqual(exp_ans, f)
+
+    def test_get_slice(self):
+
+        # get_slice is supposed to give slice to one bin before 
+        # and after provided bin index.
+
+        num_bins = 10
+        bidx = 0
+        b_start, b_stop = tools.get_slice(bidx, num_bins)
+        self.assertEqual(b_start, 0)
+        self.assertEqual(b_stop, 2)
+
+        bidx = 1
+        b_start, b_stop = tools.get_slice(bidx, num_bins)
+        self.assertEqual(b_start, 0)
+        self.assertEqual(b_stop, 3)
+
+        # Note that stop index can be at most size of array.
+        bidx = num_bins - 1
+        b_start, b_stop = tools.get_slice(bidx, num_bins)
+        self.assertEqual(b_start, num_bins-2)
+        self.assertEqual(b_stop, num_bins)
+
+        with self.assertRaises(ValueError):
+            num_bins = -1
+            bidx = 1
+            b_start, b_stop = tools.get_slice(bidx, num_bins)
+
+        with self.assertRaises(ValueError):
+            num_bins = 10
+            bidx = 10
+            b_start, b_stop = tools.get_slice(bidx, num_bins)
+
+        with self.assertRaises(ValueError):
+            num_bins = 0
+            bidx = 10
+            b_start, b_stop = tools.get_slice(bidx, num_bins)
+
+        with self.assertRaises(ValueError):
+            num_bins = -1
+            bidx = 10
+            b_start, b_stop = tools.get_slice(bidx, num_bins)

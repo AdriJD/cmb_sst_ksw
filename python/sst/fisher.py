@@ -394,7 +394,6 @@ class PreCalc(MPIBase):
             idxs_on_rank = self.bins['idxs_on_rank'][str(rank)]
             return bins_on_rank, idxs_on_rank
 
-#    @profile
     def init_bins(self, lmin=None, lmax=None, bins=None,
                   parity='odd', verbose=False):
         '''
@@ -414,6 +413,8 @@ class PreCalc(MPIBase):
         parity : str
             Consider tuples in ell that are parity "odd"
             or "even". If None, use both. (default : "odd")
+        verbose : bool, int
+            If True or integer print stuff.
 
         Notes
         -----
@@ -456,9 +457,6 @@ class PreCalc(MPIBase):
 
         if lmax <= lmin:
             raise ValueError('lmax <= lmin')
-
-#        self.bins['lmax'] = lmax
-#        self.bins['lmin'] = lmin
 
         ells = np.arange(lmin, lmax+1)
         self.bins['ells'] = ells
@@ -544,7 +542,7 @@ class PreCalc(MPIBase):
                     self._comm.Send(num_pass, dest=0, tag=rank)
                     self._comm.Send(first_pass, dest=0, tag=rank + self.mpi_size)
 
-                    if verbose:
+                    if verbose == 2:
                         print(self.mpi_rank, 'sent')
 
                 # Receive the arrays on root.
@@ -563,7 +561,7 @@ class PreCalc(MPIBase):
                                     source=rank, tag=rank)
                     self._comm.Recv(first_pass_rec_cont,
                                     source=rank, tag=rank + self.mpi_size)
-                    if verbose:
+                    if verbose == 2:
                         print('root received {}'.format(rank))
 
                     # Change to fancy indexing: num_pass_rec[[bins],...] = ..
@@ -677,7 +675,7 @@ class PreCalc(MPIBase):
         sparse : bool
             Calculate beta over multipoles given by bins, then
             interpolate of full mulitpole range. (default : True)
-        verbose : bool
+        verbose : bool, int
             Print progress (default : False)
         
         Notes
@@ -1042,7 +1040,7 @@ class PreCalc(MPIBase):
                     self._comm.Send(beta_s, dest=0, tag=rank)
                     self._comm.Send(beta_t, dest=0,
                                     tag=rank + self.mpi_size + 1)
-                    if verbose:
+                    if verbose == 2:
                         print(self.mpi_rank, 'sent')
 
                 if self.mpi_rank == 0:
@@ -1051,7 +1049,7 @@ class PreCalc(MPIBase):
                     self._comm.Recv(beta_t_sub, source=rank,
                                     tag=rank + self.mpi_size + 1)
 
-                    if verbose:
+                    if verbose == 2:
                         print('root received {}'.format(rank))
 
                     # place into beta_full
@@ -2133,7 +2131,7 @@ class Fisher(Template, PreCalc):
                             self._comm.Send(first_pass2send, dest=rank,
                                             tag=rank + self.mpi_size)
 
-                        if kwargs.get('verbose', False):
+                        if kwargs.get('verbose', False) == 2:
                             print('root sent to {}'.format(rank))
 
                     # Receive the arrays on the rank.
@@ -2151,7 +2149,7 @@ class Fisher(Template, PreCalc):
                                         source=0, tag=rank)
                         self._comm.Recv(first_pass_rec,
                                         source=0, tag=rank + self.mpi_size)
-                        if kwargs.get('verbose', False):
+                        if kwargs.get('verbose', False) == 2:
                             print('rank {} received'.format(rank))
 
 
@@ -2564,25 +2562,7 @@ class Fisher(Template, PreCalc):
         # For use in loop.
         if self.mpi_rank == 0:
             n_pass_bool = self.bins['num_pass_full'].astype(bool)
-
-        def get_slice(bidx):
-            '''Return start and stop indices for outer bin'''
-            # We need to give slice that spans one bin
-            # before and after bidx bin for interpolation.
-            if bidx == 0:
-                # First bin, only give second bin.
-                b_start = bidx
-                b_stop = bidx + 2
-            elif bidx == num_bins - 1:
-                # Last bin, only give second-to-last bin.
-                b_start = bidx - 1
-                b_stop = bidx + 1
-            else:
-                b_start = bidx - 1
-                b_stop = bidx + 2
-
-            return b_start, b_stop
-
+            
         # Treat bins on rank 0 separately, send/recv same rank buggy.
         for rank in xrange(1, size):
                             
@@ -2594,7 +2574,7 @@ class Fisher(Template, PreCalc):
                 bispec_per_bidx = [[] for i in bidxs]
 
             for idx, bidx in enumerate(bidxs):
-                b_start, b_stop = get_slice(bidx)
+                b_start, b_stop = tools.get_slice(bidx, num_bins)
                 
                 if self.mpi_rank == 0:
 
@@ -2650,7 +2630,7 @@ class Fisher(Template, PreCalc):
 
             for idx, bidx in enumerate(bidxs):
 
-                b_start, b_stop = get_slice(bidx)
+                b_start, b_stop = tools.get_slice(bidx, num_bins)
                 mask = n_pass_bool[b_start:b_stop,...]
 
                 f_pass = self.bins['first_pass_full'][b_start:b_stop,...][mask]
