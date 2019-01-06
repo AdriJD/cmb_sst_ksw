@@ -1,2 +1,21 @@
 # cmb_sst_ksw
-Code to estimate scalar-scalar-tensor bispectra in the CMB using a generalised KSW estimator
+
+**Author** Adri J. Duivenvoorden
+
+**contact**: adri.duivenvoorden@fysik.su.se
+
+Code library to calculate Fisher information and related quantities for scalar-scalar-tensor CMB bispectra. Will add generalised KSW estimator at some point.
+
+### Installation
+
+```
+python setup.py install --user
+```
+run unittests:
+
+```
+python setup.py test
+```
+
+
+
