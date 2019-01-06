@@ -2698,9 +2698,79 @@ class Fisher(Template, PreCalc):
         -------
         slice : ndarray
             Shape = (M, nptrls)
+        doublets : ndarray
+            (l2, l3) doublets.
         '''
         pass
 
+        # find bidx that has ell, get bidx_start, stop for that bidx
+        # get part of fp and b from root. Get triplets, remove all l1s 
+        # that are not ell -> doublets, interpolate.
+
+        # NOTE, how to do MPI? do everything on root!
+        if self.mpi_rank != 0:
+            return
+
+        
+
+
+        bins = self.bins['bins']
+        parity = self.bins['parity']        
+        nptr = self.bispec['pol_trpl'].shape[0]
+
+        if self.mpi_rank == 0:
+            # Decide how to distribute load over MPI ranks.
+            ells_fisher = np.arange(2, lmax + 1)
+            sizes_bispec = tools.estimate_n_tuples(ells_fisher, lmax)        
+
+            bidx_sorted, n_per_bin = tools.rank_bins(
+                bins, sizes_bispec, ells_fisher)
+
+            bidx_per_rank = tools.distribute_bins_simple(bidx_sorted,
+                                      n_per_bin, self.mpi_size)
+        else:
+            bidx_per_rank = None
+
+        bidx_per_rank = self.broadcast(bidx_per_rank)
+        bins_on_rank = bins[bidx_per_rank[self.mpi_rank]]
+
+        if verbose:
+            for rank in xrange(self.mpi_size):
+                if self.mpi_rank == rank:
+                    print('[rank {:03d}]: working on bins {}'.format(
+                        rank, bins_on_rank))
+
+        # Note: fp = first_pass, b = bispec. Lists of arrays per bidx.
+        ## CHANGE THIS
+        ## ADD THIS bispec *= self.common_amp 
+
+        fp_per_bidx, b_per_bidx, n_trpl_per_bidx = self._mpi_scatter_for_fisher(
+            bidx_per_rank)
+        
+        fisher_on_rank = 0
+        for idx, bidx in enumerate(bidx_per_rank[self.mpi_rank]):
+
+            num_triplets = n_trpl_per_bidx[idx]
+            
+            if num_triplets == 0 and bidx == bins.size - 1:
+                # Last bin has no valid tuples. Just skip.
+                # Perhaps give 0 contribution to fisher?
+                continue
+
+            triplets = self._init_triplets(bidx, num_triplets)
+
+            b_i, nb_frac, qh_exit = self._interp_b(triplets, 
+                            fp_per_bidx[idx], b_per_bidx[idx])
+
+            if not qh_exit and verbose:
+                print('[rank {:03d}]: Completely switching to nearest-neighbor'
+                      ' interpolation for bidx {}, (bin = {}, lmax = {})'.format(
+                          rank, bidx, bins[bidx], lmax))
+            if verbose == 2:
+                print('[rank {:03d}]: Used nearest-neighbor for {:.2f}% '
+                      'of triplets for bidx {}, (bin = {}, lmax = {})'.format(
+                          rank, nb_frac * 100, bidx, bins[bidx], lmax))
+                
     def _interp_b(self, triplets, fp_for_bidx, b_for_bidx):
         '''
         Use linear interpolation to interpolate bispectrum
@@ -2749,6 +2819,12 @@ class Fisher(Template, PreCalc):
             if 'QH6154' in str(e):
                 # Expected Qhull error for last bin in cases where
                 # lmax is smaller than the first bin with width > 1.
+                weights = np.ones((xi.shape[0], 4), dtype=float) 
+                vertices = np.ones((xi.shape[0], 4), dtype=int) 
+                weights *= np.nan # I.e. use nearest-neighbor for all.
+                qh_exit = False
+            elif 'QH6214' in str(e):
+                # Expected Qhull error for very low lmax.
                 weights = np.ones((xi.shape[0], 4), dtype=float) 
                 vertices = np.ones((xi.shape[0], 4), dtype=int) 
                 weights *= np.nan # I.e. use nearest-neighbor for all.
@@ -2886,6 +2962,10 @@ class Fisher(Template, PreCalc):
             if num_triplets == 0 and bidx == bins.size - 1:
                 # Last bin has no valid tuples. Just skip.
                 # Perhaps give 0 contribution to fisher?
+                if verbose == 2:
+                    print('[rank {:03d}]: Outer bin without '
+                     'valid triplets (bin = {}, lmax = {})'.format(
+                         self.mpi_rank, bins[bidx], lmax))
                 continue
 
             triplets = self._init_triplets(bidx, num_triplets)
@@ -2896,11 +2976,11 @@ class Fisher(Template, PreCalc):
             if not qh_exit and verbose:
                 print('[rank {:03d}]: Completely switching to nearest-neighbor'
                       ' interpolation for bidx {}, (bin = {}, lmax = {})'.format(
-                          rank, bidx, bins[bidx], lmax))
+                          self.mpi_rank, bidx, bins[bidx], lmax))
             if verbose == 2:
                 print('[rank {:03d}]: Used nearest-neighbor for {:.2f}% '
                       'of triplets for bidx {}, (bin = {}, lmax = {})'.format(
-                          rank, nb_frac * 100, bidx, bins[bidx], lmax))
+                          self.mpi_rank, nb_frac * 100, bidx, bins[bidx], lmax))
                 
             # Compute Fisher information.
             fisher = tools.fisher_loop(b_i, triplets, 
