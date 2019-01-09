@@ -586,3 +586,30 @@ class TestTools(unittest.TestCase):
             num_bins = -1
             bidx = 10
             b_start, b_stop = tools.get_slice(bidx, num_bins)
+
+    def test_ell2bidx(self):
+        
+        bins = [2, 3, 4, 5, 10, 20]
+        
+        ell = 2
+        self.assertEqual(tools.ell2bidx(ell, bins), 0)
+
+        ell = 4
+        self.assertEqual(tools.ell2bidx(ell, bins), 2)
+
+        ell = 6
+        self.assertEqual(tools.ell2bidx(ell, bins), 3)
+
+        ell = 20
+        self.assertEqual(tools.ell2bidx(ell, bins), 5)
+
+        ell = 21
+        with self.assertRaises(ValueError):
+            tools.ell2bidx(ell, bins)
+
+        ell = 0
+        with self.assertRaises(ValueError):
+            tools.ell2bidx(ell, bins)
+
+
+    

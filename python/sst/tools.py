@@ -860,4 +860,36 @@ def _fisher_loop(bispec, triplets, ic1, ic2, ic3, lmin):
         
     return fisher
 
+@numba.jit(nopython=True)
+def ell2bidx(ell, bins):
+    '''
+    Return index for which bins[i] <= ell < bins[i+1]
+    
+    Arguments
+    ---------
+    ell : int
+    bins : array-like
+        Monotonically increasing.
+
+    Returns
+    -------
+    bidx : int
+       Bin index       
+    '''
+    
+    for bidx in xrange(len(bins) - 1):
+        if ell == bins[bidx]:
+            return bidx
+
+        if ell > bins[bidx] and ell < bins[bidx+1]:
+            return bidx
+
+    # Treat last element separately.
+    if ell == bins[-1]:
+        return len(bins) - 1
+
+    raise ValueError('Input ell outside bins.')
+
+
+    
 
