@@ -18,7 +18,7 @@ from sst import Fisher, camb_tools
 
 opj = os.path.join
 
-def get_cls(cls_path, lmax, A_lens=1):
+def get_cls(cls_path, lmax, A_lens=1, no_ee=False, no_tt=False):
     '''
     returns
     -------
@@ -47,6 +47,11 @@ def get_cls(cls_path, lmax, A_lens=1):
     # depending on A_lens, remove lensing contribution
     cls_lensed[2] -= (1. - A_lens) * BB_lens_contr
     ells = np.arange(2, lmax + 1)
+
+    if no_ee:
+        cls_lensed[1,:] = 1e48
+    if no_tt:
+        cls_lensed[0,:] = 1e48
 
     return cls_lensed, ells
 
@@ -89,12 +94,12 @@ def run(prim_template='equilateral', out_dir=None, camb_dir=None,
     F.get_beta(func=prim_template, radii=radii, verbose=True, optimize=True,
                interp_factor=interp_factor, load=True, sparse=True, tag=beta_tag)
 
-    F.get_binned_bispec('local', load=True, tag=tag)
+    F.get_binned_bispec('equilateral', load=True, tag=tag)
 
-    cls, ells = get_cls(camb_dir, lmax)
+    cls, ells = get_cls(camb_dir, lmax, A_lens=1, no_ee=False, no_tt=False)
 
     invcov, cov = F.get_invcov(ells, cls, return_cov=True)    
-    f_i = F.interp_fisher(invcov, ells, lmin=2, lmax=lmax, verbose=2)
+    f_i = F.interp_fisher(invcov, ells, lmin=2, lmax=lmax, verbose=1)
     if F.mpi_rank == 0:        
         print(f_i)
 

@@ -164,4 +164,3 @@ class TestTools(unittest.TestCase):
         
         np.testing.assert_array_equal(good_triplets_exp, good_triplets)
 
-

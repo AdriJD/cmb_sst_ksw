@@ -2492,7 +2492,7 @@ class Fisher(Template, PreCalc):
 
             for idx2, i2 in enumerate(bins[idx1:end_bidx]):
                 idx2 += idx1
-                cl2 = invcov2[idx1,:,:] # nptr x nptr matrix.
+                cl2 = invcov2[idx2,:,:] # nptr x nptr matrix.
 
                 cl12 = cl1 * cl2
 
@@ -2977,7 +2977,10 @@ class Fisher(Template, PreCalc):
             fisher *= self.common_amp ** 2 # (16 pi^4 As^2)^2
             fisher_on_rank += fisher
 
-        fisher = self._comm.allreduce(fisher_on_rank)
+        if self.mpi:
+            fisher = self._comm.allreduce(fisher_on_rank)
+        else:
+            fisher = fisher_on_rank
         self.barrier()
 
         return fisher
