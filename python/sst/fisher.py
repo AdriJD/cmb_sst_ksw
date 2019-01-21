@@ -1583,7 +1583,9 @@ class Fisher(Template, PreCalc):
                                   0, 0, 0])
 
                     # NOTE: TODO, B must be imag, so check this
-                    ang *= np.real((-1j)**(ell1 + ell2 + ell3 - 1))
+                    # NOTE NOTE NOTE NOTE
+#                    ang *= np.real((-1j)**(ell1 + ell2 + ell3 - 1))
+#                    ang *= np.imag((-1j)**(ell1 + ell2 + ell3)) # Matches shiraishi.
                     ang *= (-1)**((L1 + L2 + L3)/2)
 
                     ang *= np.sqrt( (2*L1 + 1) * (2*L2 + 1) * (2*L3 + 1))
@@ -2511,7 +2513,7 @@ class Fisher(Template, PreCalc):
                     ## both B's have num 
                     #f /= float(num)
                     f *= num
-                    
+
                     # Delta_l1l2l3.
                     if i1 == i2 == i3:
                         f /= 6.

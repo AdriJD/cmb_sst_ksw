@@ -71,7 +71,9 @@ def plot_slice(F, filename, b_slice, doublets, plot_lmin=None, plot_lmax=None):
     '''
     if F.mpi_rank == 0:
         pol_trpl = F.bispec['pol_trpl']
-        print np.sum(np.isnan(b_slice))
+        if np.sum(np.isnan(b_slice)):
+            # Panic.
+            raise ValueError('nan in b_slice')
         plot_tools.plot_bispec_slice(filename, doublets, b_slice, pol_trpl,
                                      plot_lmin=plot_lmin, plot_lmax=plot_lmax)
         
@@ -120,20 +122,22 @@ if __name__ == '__main__':
     out_dir = opj(base_dir, '20181219_sst_interp')
     camb_dir = opj(base_dir, '20180911_sst/camb_output/lensed_r0_4000')
 
-    ell = 150
-    lmax = 700
+    ell = 5
+    lmax = 10
 
-    plot_lmin = 150
-    plot_lmax = 400
+    plot_lmin = 5
+    plot_lmax = 10
+
+    fformat = 'pdf'
 
     prim_template = 'local'
     F, b_slice, doublets = run(ell, out_dir=out_dir, camb_dir=camb_dir, lmax=lmax,
                                prim_template=prim_template)
 
-    filename = opj(out_dir, 'img', 'bispec_{}_ell{}_lmax{}.png'.format(
-        prim_template, ell, lmax))
+    filename = opj(out_dir, 'img', 'bispec_{}_ell{}_lmax{}.{}'.format(
+        prim_template, ell, lmax, fformat))
     plot_slice(F, filename, b_slice, doublets, plot_lmin=plot_lmin, plot_lmax=plot_lmax)
 
-    filename_b = opj(out_dir, 'img', 'bispec_{}_b_ell{}_lmax{}.png'.format(
-        prim_template, ell, lmax))
+    filename_b = opj(out_dir, 'img', 'bispec_{}_b_ell{}_lmax{}.{}'.format(
+        prim_template, ell, lmax, fformat))
     plot_binned_slice(F, filename_b, plot_lmin=plot_lmin, plot_lmax=plot_lmax)

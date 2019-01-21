@@ -813,8 +813,8 @@ def _fisher_loop(bispec, triplets, ic1, ic2, ic3, lmin):
 
     num_triplets = triplets.shape[0]
 
-    lidx1_old = -10
-    lidx2_old = -10
+#    lidx1_old = -10
+#    lidx2_old = -10
 
     fisher = 0
 

@@ -122,5 +122,5 @@ if __name__ == '__main__':
     camb_dir = opj(base_dir, '20180911_sst/camb_output/lensed_r0_4000')
     # camb_dir = opj(base_dir, '20171217_sst/camb_output/high_acy/sparse_5000')
 
-    run(out_dir=out_dir, camb_dir=camb_dir, lmax=3)
+    run(out_dir=out_dir, camb_dir=camb_dir, lmax=50)
 
