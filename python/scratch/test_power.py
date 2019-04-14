@@ -29,20 +29,20 @@ F = PreCalc()
 
 F.get_camb_output(camb_out_dir=camb_dir, tag='no_lens', lensed=False, prim_type='scalar',
                   high_ell=False)
-cls_camb_s = F.depo['cls'].copy()
+cls_camb_s = F.cosmo['cls'].copy()
 
 F.get_camb_output(camb_out_dir=camb_dir, tag='no_lens', lensed=False, prim_type='tensor',
                   high_ell=False)
-cls_camb_t = F.depo['cls'].copy()
+cls_camb_t = F.cosmo['cls'].copy()
 
-tr_s = F.depo['scalar']['transfer']
-tr_t = F.depo['tensor']['transfer']
-lmax_s = F.depo['scalar']['lmax']
-lmax_t = F.depo['tensor']['lmax']
+tr_s = F.cosmo['scalar']['transfer']
+tr_t = F.cosmo['tensor']['transfer']
+lmax_s = F.cosmo['scalar']['lmax']
+lmax_t = F.cosmo['tensor']['lmax']
 lmin = 2
 
-k_s = F.depo['scalar']['k']
-k_t = F.depo['tensor']['k']
+k_s = F.cosmo['scalar']['k']
+k_t = F.cosmo['tensor']['k']
 
 
 # plot scalar transfer

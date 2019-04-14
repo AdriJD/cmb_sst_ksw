@@ -65,6 +65,6 @@ if F.mpi_rank  == 0:
     np.save(opj(ana_dir, 'bispectrum/run_pico', 'bins.npy'), F.bins)
     np.save(opj(ana_dir, 'bispectrum/run_pico', 'num_pass.npy'), F.num_pass)
     np.save(opj(ana_dir, 'bispectrum/run_pico', 'first_pass.npy'), F.first_pass)
-    np.save(opj(ana_dir, 'bispectrum/run_pico', 'beta_s.npy'), F.depo['scalar']['b_beta'])
-    np.save(opj(ana_dir, 'bispectrum/run_pico', 'beta_t.npy'), F.depo['tensor']['b_beta'])
+    np.save(opj(ana_dir, 'bispectrum/run_pico', 'beta_s.npy'), F.cosmo['scalar']['b_beta'])
+    np.save(opj(ana_dir, 'bispectrum/run_pico', 'beta_t.npy'), F.cosmo['tensor']['b_beta'])
     np.save(opj(ana_dir, 'bispectrum/run_pico', 'pol_trpl.npy'), F.pol_trpl)

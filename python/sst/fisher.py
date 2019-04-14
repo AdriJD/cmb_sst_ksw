@@ -42,12 +42,14 @@ class PreCalc(MPIBase):
 
         # Precomputed quantities go in dictionaries to not pollute
         # the namespace too much.
-        self.depo = {}
+        self.cosmo = {} 
         self.bins = {}
         self.beta = {}
         self.bispec = {}
 
+        self.cosmo['init_cosmo'] = False
         self.bins['init_bins'] = False
+        self.beta['init_beta'] = False
 
         # init MPIBase
         super(PreCalc, self).__init__(**kwargs)
@@ -59,7 +61,7 @@ class PreCalc(MPIBase):
     def get_camb_output(self, camb_out_dir='.', high_ell=False,
                         interp_factor=None, **kwargs):
         '''
-        Store CAMB ouput (transfer functions and Cls) and store
+        Store CAMB ouput (transfer functions, Cls etc.) and store
         in internal dictionaries.
 
         Keyword Arguments
@@ -97,8 +99,8 @@ class PreCalc(MPIBase):
         cls = self.broadcast_array(cls)
         lmax = self.broadcast(lmax)
 
-        self.depo['cls'] = cls
-        self.depo['cls_lmax'] = lmax
+        self.cosmo['cls'] = cls
+        self.cosmo['cls_lmax'] = lmax
 
         # load transfer functions, k-arrays and lmax
         for ttype in ['scalar', 'tensor']:
@@ -194,7 +196,7 @@ class PreCalc(MPIBase):
                 if self.mpi_rank == 0:
                     print("...done")
 
-            self.depo[ttype] = {'transfer' : tr,
+            self.cosmo[ttype] = {'transfer' : tr,
                                 'lmax' : lmax,
                                 'k' : k,
                                 'ells_camb' : ells}
@@ -203,10 +205,64 @@ class PreCalc(MPIBase):
         # guaranteed by CAMB). Needed b/c both T and S
         # transfer functions are integrated over same k
         # when calculating beta
-        ks = self.depo['scalar']['k']
-        kt = self.depo['tensor']['k']
+        ks = self.cosmo['scalar']['k']
+        kt = self.cosmo['tensor']['k']
 
         np.testing.assert_allclose(ks, kt)
+
+    def init_cosmo(self, lmax=5200, verbose=True, **kwargs):
+        '''
+        Run CAMB to get transfer functions, Cls etc. Stores
+        output in internal `cosmo` dictionary.
+
+        Arguments
+        ---------
+        lmax : int
+        
+        Keyword Arguments
+        -----------------
+        verbose : bool
+        kwargs : {camb_tools.run_camb_opts}
+
+        Notes
+        -----
+        Populates following keys in internal `cosmo' dictionary on 
+        all ranks:
+            transfer : dict
+            cls : dict
+            opts : dict  
+            init_cosmo : bool
+        '''
+
+        if verbose is True:
+            # Also print things in run_camb.
+            kwargs.update({'verbose' : True})
+
+        transfer = None
+        cls = None
+        opts = None
+
+        # Only run CAMB on root.
+        if self.mpi_rank == 0:
+
+            transfer, cls, opts = ct.run_camb(lmax, **kwargs)
+
+            if self.mpi and verbose:
+                print('Broadcasting...')
+
+        transfer = self.broadcast(transfer)
+        cls = self.broadcast(cls)
+        opts = self.broadcast(opts)
+
+        if self.mpi == 0 and verbose:
+            print('...done')
+        
+        self.cosmo['transfer'] = transfer
+        self.cosmo['cls'] = cls
+        self.cosmo['opts'] = opts
+        self.cosmo['init_cosmo'] = True
+        
+        return
 
     def get_noise_curves(self, cross_noise=False, **kwargs):
         '''
@@ -275,9 +331,9 @@ class PreCalc(MPIBase):
         lmin = self.broadcast(lmin)
         lmax = self.broadcast(lmax)
 
-        self.depo['nls'] = nls
-        self.depo['nls_lmin'] = int(lmin)
-        self.depo['nls_lmax'] = int(lmax)
+        self.cosmo['nls'] = nls
+        self.cosmo['nls_lmin'] = int(lmin)
+        self.cosmo['nls_lmax'] = int(lmax)
 
     def get_default_radii(self):
         '''
@@ -302,8 +358,8 @@ class PreCalc(MPIBase):
         re1 = np.linspace(9377, 10007, num=18, dtype=float, endpoint=False)
         re2 = np.linspace(10007, 12632, num=25, dtype=float, endpoint=False)
         rec = np.linspace(12632, 13682, num=50, dtype=float, endpoint=False)
-        rec_new = np.linspace(13682, 14500, num=300, dtype=float, endpoint=False)
-        rec_extra = np.linspace(14500, 18000, num=10, dtype=float, endpoint=False)
+        rec_new = np.linspace(13682, 15500, num=300, dtype=float, endpoint=False)
+        rec_extra = np.linspace(15500, 18000, num=10, dtype=float, endpoint=False)
 
         radii = np.concatenate((low, re1, re2, rec, rec_new, rec_extra))
 
@@ -705,12 +761,12 @@ class PreCalc(MPIBase):
             Whether or not this function has been run.
         '''
 
-        # ~80 % of time is spend on spher. bessels.
+        # ~80 % of time is spent on spher. bessels.
 
         if not self.bins['init_bins']:
             raise ValueError('bins not initialized')
 
-        ells_transfer = self.depo['scalar']['ells_camb']
+        ells_transfer = self.cosmo['transfer']['ells']
 
         if sparse:
             # Use bins as ells.
@@ -724,7 +780,7 @@ class PreCalc(MPIBase):
         else:
             # Calculate beta over all multipoles in transfer function arrays.
             ells = ells_transfer
-            ells_out = ells_transfer
+            ells_out = self.bins['ells']
 
         L_range = np.asarray(L_range)
         if np.any(~(L_range == np.unique(L_range))):
@@ -733,9 +789,9 @@ class PreCalc(MPIBase):
                              "with steps of 1")
 
         self.beta['L_range'] = L_range
-        k = self.depo['scalar']['k']
+        k = self.cosmo['transfer']['k']
 
-        if interp_factor is not None:
+        if interp_factor is not None and interp_factor != 1:
             if interp_factor % 1 != 0:
                 raise ValueError("interp_factor has to be integer.")
             interp_factor = int(interp_factor)
@@ -795,8 +851,9 @@ class PreCalc(MPIBase):
         tmp_t = np.zeros_like(k)
 
         # load both scalar and tensor transfer functions
-        transfer_s = self.depo['scalar']['transfer']
-        transfer_t = self.depo['tensor']['transfer']
+        transfer_s = self.cosmo['transfer']['scalar']
+        transfer_t = self.cosmo['transfer']['tensor']
+
         pols_s = ['I', 'E']
         pols_t = ['I', 'E', 'B']
 
@@ -826,7 +883,7 @@ class PreCalc(MPIBase):
             kr_idx = np.digitize(ells_ext, bins=kr, right=True)
             kr_idx[kr_idx == kr.size] = kr.size - 1 # fix last element
 
-            if interp_factor is not None:
+            if interp_factor is not None and interp_factor != 1:
                 interp = True
                 # Same for original k array
                 kr_old = k_old * radius
@@ -840,12 +897,16 @@ class PreCalc(MPIBase):
                     self.mpi_rank, ridx, radii_sub.size - 1, radius))
 
             ell_prev = ells[0] - 1
+
             for lidx_b, ell in enumerate(ells):
 
                 # ells is possible bins, so map lidx_b to multipole index
                 # of transfer function.
                 # Otherwise lidx_b should just be lidx.
-                lidx = idxmap[lidx_b]
+                if sparse:
+                    lidx = idxmap[lidx_b]
+                else:
+                    lidx = lidx_b
 
                 if self.mpi_rank == 0 and verbose:
                     sys.stdout.write('\r'+'lidx: {}/{}, ell: {}'.format(
@@ -956,48 +1017,47 @@ class PreCalc(MPIBase):
 
         self.barrier()
 
-        if sparse:
-            if self.mpi_rank == 0 and verbose:
-                print('Interpolating beta over multipoles')
-            # Spline betas to full size in ell again.
-            beta_s_full = np.zeros((ells_out.size, L_range.size,
-                                    ks, len(pols_s), radii_sub.size))
-            beta_t_full = np.zeros((ells_out.size, L_range.size,
-                                    ks, len(pols_t), radii_sub.size))
+        if self.mpi_rank == 0 and verbose:
+            print('Interpolating beta over multipoles')
+        # Spline betas to full size in ell again.
+        beta_s_full = np.zeros((ells_out.size, L_range.size,
+                                ks, len(pols_s), radii_sub.size))
+        beta_t_full = np.zeros((ells_out.size, L_range.size,
+                                ks, len(pols_t), radii_sub.size))
 
-            for ridx, _ in enumerate(radii_sub):
-
-                if self.mpi_rank == 0 and verbose:
-                    sys.stdout.write('\r'+'ridx: {}/{}'.format(
-                        ridx+1, radii_sub.size))
-
-                for Lidx, _ in enumerate(L_range):
-                    for pidx, pol in enumerate(pols_t):
-                        for kidx in xrange(ks):
-
-                            # Tensor.
-                            cs = CubicSpline(ells,
-                                 beta_t[:,Lidx,kidx,pidx,ridx])
-                            beta_t_full[:,Lidx,kidx,pidx,ridx] \
-                                = cs(ells_out)
-
-                            if pol == 'B':
-                                continue
-
-                            # Scalar.
-                            cs = CubicSpline(ells,
-                                 beta_s[:,Lidx,kidx,pidx,ridx])
-                            beta_s_full[:,Lidx,kidx,pidx,ridx] \
-                                = cs(ells_out)
+        for ridx, _ in enumerate(radii_sub):
 
             if self.mpi_rank == 0 and verbose:
-                print('')
-                sys.stdout.flush()
+                sys.stdout.write('\r'+'ridx: {}/{}'.format(
+                    ridx+1, radii_sub.size))
 
-            beta_s = beta_s_full
-            beta_t = beta_t_full
+            for Lidx, _ in enumerate(L_range):
+                for pidx, pol in enumerate(pols_t):
+                    for kidx in xrange(ks):
 
-        # Combine all sub range betas on root if mpi.
+                        # Tensor.
+                        cs = CubicSpline(ells,
+                             beta_t[:,Lidx,kidx,pidx,ridx])
+                        beta_t_full[:,Lidx,kidx,pidx,ridx] \
+                            = cs(ells_out)
+
+                        if pol == 'B':
+                            continue
+
+                        # Scalar.
+                        cs = CubicSpline(ells,
+                             beta_s[:,Lidx,kidx,pidx,ridx])
+                        beta_s_full[:,Lidx,kidx,pidx,ridx] \
+                            = cs(ells_out)
+
+        if self.mpi_rank == 0 and verbose:
+            print('')
+            sys.stdout.flush()
+
+        beta_s = beta_s_full
+        beta_t = beta_t_full
+
+        # Combine all sub range (part of radii) betas on root if mpi.
         if self.mpi:
             self.barrier()
 
@@ -1080,9 +1140,10 @@ class PreCalc(MPIBase):
         # Binned versions.
         self.beta['b_beta_s'] = b_beta_s
         self.beta['b_beta_t'] = b_beta_t
-        self.beta['init_beta'] = True
 
         self.beta['ells'] = ells_out
+
+        self.beta['init_beta'] = True
 
         return
         
@@ -1206,7 +1267,7 @@ class Template(object):
         (see Creminelli et al. 2005).
         '''
 
-        self.scalar_amp = 2.1e-9
+        self.scalar_amp = 2.1056e-9
         self.common_amp = 16 * np.pi**4 * self.scalar_amp**2
 
         super(Template, self).__init__(**kwargs)
@@ -1232,7 +1293,7 @@ class Template(object):
         '''
 
         if k is None:
-            k = self.depo['scalar']['k']
+            k = self.cosmo['scalar']['k']
 
         km3 = k**-3
         ones = np.ones(k.size)
@@ -1259,7 +1320,7 @@ class Template(object):
         '''
 
         if k is None:
-            k = self.depo['scalar']['k']
+            k = self.cosmo['scalar']['k']
 
         km3 = k**-3
         km2 = k**-2
@@ -1581,13 +1642,17 @@ class Fisher(Template, PreCalc):
                     # Overall angular part
                     ang = wig3jj([2*L1, 2*L2, 2*L3,
                                   0, 0, 0])
+                    if ang == 0:
+                        # Triangle constraint on L's not obeyed.
+                        continue
 
-                    # NOTE: TODO, B must be imag, so check this
-                    # NOTE NOTE NOTE NOTE
-#                    ang *= np.real((-1j)**(ell1 + ell2 + ell3 - 1))
-#                    ang *= np.imag((-1j)**(ell1 + ell2 + ell3)) # Matches shiraishi.
-                    ang *= (-1)**((L1 + L2 + L3)/2)
+                    # We do not need this prefactor, cancels in Fisher.
+                    # ang *= np.real((-1j)**(ell1 + ell2 + ell3 - 1))
+                    # ang *= np.imag((-1j)**(ell1 + ell2 + ell3)) # Matches shiraishi.
 
+                    ang *= (-1)**((L1 + L2 + L3)/2) # Power is always int.
+
+                    # prefactor of I^000_{L1L2L3}
                     ang *= np.sqrt( (2*L1 + 1) * (2*L2 + 1) * (2*L3 + 1))
                     ang /= (2. * np.sqrt(np.pi))
 
@@ -1639,12 +1704,12 @@ class Fisher(Template, PreCalc):
                         print(ang_tss, ang_sts, ang_sst)
                         print(np.abs(ell1 - ell2) <= ell3 <= ell1 + ell2)
                         print(np.abs(L1 - L2) <= L3 <= L1 + L2)
+                        print(np.abs(ell1 - L1) <= 1 <= ell1 + L1)
                         print(np.abs(ell1 - L1) <= 2 <= ell1 + L1)
-                        print(np.abs(ell1 - L1) <= 4 <= ell1 + L1)
+                        print(np.abs(ell2 - L2) <= 1 <= ell2 + L2)
                         print(np.abs(ell2 - L2) <= 2 <= ell2 + L2)
-                        print(np.abs(ell2 - L2) <= 4 <= ell2 + L2)
+                        print(np.abs(ell3 - L3) <= 1 <= ell3 + L3)
                         print(np.abs(ell3 - L3) <= 2 <= ell3 + L3)
-                        print(np.abs(ell3 - L3) <= 4 <= ell3 + L3)
                         raise ValueError("angular prefactor is zero")
                         #continue
 
@@ -1890,12 +1955,21 @@ class Fisher(Template, PreCalc):
         '''
 
         # All the tuples for single B-mode bispectra.
+#        L_tups = [(+1, +1, +1),
+#                  (+1, -1, -1),
+#                  (-1, +1, +1),
+#                  (-1, -1, -1),
+#                  (+1, -1, +1),
+#                  (-1, +1, -1)]
+
         L_tups = [(+1, +1, +1),
                   (+1, -1, -1),
                   (-1, +1, +1),
                   (-1, -1, -1),
                   (+1, -1, +1),
-                  (-1, +1, -1)]
+                  (-1, +1, -1),
+                  (+1, +1, -1),
+                  (-1, -1, +1)]
 
         for Lidx, L_tup in enumerate(L_tups):
 
@@ -2186,12 +2260,12 @@ class Fisher(Template, PreCalc):
 
     def get_beta(self, load=True, tag=None, **kwargs):
         '''
-        Compute binned bispectrum or load from disk.
+        Compute beta or load from disk.
 
         Keyword arguments
         -----------------
         load : bool
-            Try to load bispectrum + properties. (default : True)
+            Try to load beta. (default : True)
         tag : str, None
             Tag appended to stored/loaded .pkl file as beta_<tag>.pkl.
             (default : None)
@@ -2223,10 +2297,25 @@ class Fisher(Template, PreCalc):
 
             if recompute is False:
                 # Succesfully loaded on root, so broadcast.
-                if self.mpi_rank != 0:
-                    self.beta = None
-                self.beta = self.broadcast(self.beta)
+                # Broadcast each key in beta dict separately, 
+                # for lmax > 5000 file too big otherwise.
 
+                if self.mpi_rank == 0:
+                    beta_keys = self.beta.keys()
+
+                if self.mpi_rank != 0:
+                    self.beta = {}
+                    beta_keys = None
+
+                beta_keys = self.broadcast(beta_keys)
+
+                if self.mpi_rank != 0:                    
+                    for bkey in beta_keys:
+                        self.beta[bkey] = None
+                
+                for bkey in beta_keys:
+                    self.beta[bkey] = self.broadcast(self.beta[bkey])
+                                            
         if recompute:
             if self.mpi_rank == 0:
                 print('Recomputing beta')
@@ -2244,6 +2333,63 @@ class Fisher(Template, PreCalc):
                 # Store in pickle file.
                 with open(beta_file, 'wb') as handle:
                     pickle.dump(self.beta, handle,
+                                protocol=pickle.HIGHEST_PROTOCOL)
+
+    def get_cosmo(self, load=True, tag=None, **kwargs):
+        '''
+        Compute transfer functions and cls or load from disk.
+
+        Keyword arguments
+        -----------------
+        load : bool
+            Try to load cosmo quantities. (default : True)
+        tag : str, None
+            Tag appended to stored/loaded .pkl file as cosmo_<tag>.pkl.
+            (default : None)
+        kwargs : {init_cosmo_opts}
+        '''
+
+        path = self.subdirs['precomputed']
+        if tag is None:
+            cosmo_file = opj(path, 'cosmo.pkl')
+        else:
+            cosmo_file = opj(path, 'cosmo_{}.pkl'.format(tag))
+        recompute = not load
+
+        if load:
+            if self.mpi_rank == 0:
+                # Loading and printing on root.
+                try:
+                    pkl_file = open(cosmo_file, 'rb')
+                except IOError:
+                    print('{} not found'.format(cosmo_file))
+                    recompute = True
+                else:
+                    print('loaded cosmo from {}'.format(cosmo_file))
+                    self.cosmo = pickle.load(pkl_file)
+                    pkl_file.close()
+
+            # This lets nonzero ranks know that file is not found.
+            recompute = self.broadcast(recompute)
+
+            if recompute is False:
+                # Succesfully loaded on root, so broadcast.
+                self.cosmo = self.broadcast(self.cosmo)
+
+        if recompute:
+            if self.mpi_rank == 0:
+                print('Recomputing cosmo')
+
+            self.init_cosmo(**kwargs)
+
+            # Save for next time.
+            if self.mpi_rank == 0:
+
+                print('Storing cosmo as: {}'.format(cosmo_file))
+
+                # Store in pickle file.
+                with open(cosmo_file, 'wb') as handle:
+                    pickle.dump(self.cosmo, handle,
                                 protocol=pickle.HIGHEST_PROTOCOL)
                 
     def get_invcov(self, ells, nls, return_cov=False):

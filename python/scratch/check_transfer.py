@@ -22,14 +22,14 @@ F = fisher.Fisher()
 F.get_camb_output(camb_out_dir=camb_dir, tag='r0', lensed=False, 
                   high_ell=True)
 
-tr_s = F.depo['scalar']['transfer']
-tr_t = F.depo['tensor']['transfer']
-lmax_s = F.depo['scalar']['lmax']
-lmax_t = F.depo['tensor']['lmax']
-k_s = F.depo['scalar']['k']
-k_t = F.depo['tensor']['k']
+tr_s = F.cosmo['scalar']['transfer']
+tr_t = F.cosmo['tensor']['transfer']
+lmax_s = F.cosmo['scalar']['lmax']
+lmax_t = F.cosmo['tensor']['lmax']
+k_s = F.cosmo['scalar']['k']
+k_t = F.cosmo['tensor']['k']
 
-ells = F.depo['scalar']['ells_sparse']
+ells = F.cosmo['scalar']['ells_sparse']
 
 assert np.array_equal(k_s, k_t)
 assert lmax_s == lmax_t
@@ -38,12 +38,12 @@ assert lmax_s == lmax_t
 F.get_camb_output(camb_out_dir=camb_dir, tag='r0', lensed=False, 
                   high_ell=False)
 
-tr_s_l = F.depo['scalar']['transfer']
-tr_t_l = F.depo['tensor']['transfer']
-lmax_s_l = F.depo['scalar']['lmax']
-lmax_t_l = F.depo['tensor']['lmax']
-k_s_l = F.depo['scalar']['k']
-k_t_l = F.depo['tensor']['k']
+tr_s_l = F.cosmo['scalar']['transfer']
+tr_t_l = F.cosmo['tensor']['transfer']
+lmax_s_l = F.cosmo['scalar']['lmax']
+lmax_t_l = F.cosmo['tensor']['lmax']
+k_s_l = F.cosmo['scalar']['k']
+k_t_l = F.cosmo['tensor']['k']
 
 # plot some ell-slices through both transfer functions
 # to check if k-interpolation at high ell went okay

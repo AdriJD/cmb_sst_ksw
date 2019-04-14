@@ -107,13 +107,15 @@ class TestTools(unittest.TestCase):
         F = Fisher(self.test_dir)
         F.init_bins(lmin=10, lmax=30, parity='odd')
 
-        n_gd_bins = np.sum(F.bins['num_pass_full'].astype(bool))
-        n_gd_tripl = np.sum(F.bins['first_pass_full'].astype(bool)) / 3.
+        # Only root has access to full-sized arrays.
+        if F.mpi_rank == 0:
+            n_gd_bins = np.sum(F.bins['num_pass_full'].astype(bool))
+            n_gd_tripl = np.sum(F.bins['first_pass_full'].astype(bool)) / 3.
 
-        assert n_gd_bins == n_gd_tripl
+            self.assertEqual(n_gd_bins, n_gd_tripl)
 
-        passed_trpl = F.bins['first_pass_full'][F.bins['num_pass_full'].astype(bool)]
-        assert n_gd_bins == np.sum(passed_trpl.astype(bool)) / 3.
+            passed_trpl = F.bins['first_pass_full'][F.bins['num_pass_full'].astype(bool)]
+            self.assertEqual(n_gd_bins, np.sum(passed_trpl.astype(bool)) / 3.)
 
     def test_save_load_bispectrum(self):
         
@@ -154,13 +156,52 @@ class TestTools(unittest.TestCase):
 
         F = Fisher(self.test_dir)
         F.init_bins(lmin=lmin, lmax=lmax, parity=parity, bins=bins)
-        num_pass = F.bins['num_pass_full']
-        first_pass = F.bins['first_pass_full']
         
-        good_triplets_exp = first_pass[num_pass.astype(bool)]
-        good_triplets = np.zeros_like(good_triplets_exp)
-
-        tools.get_good_triplets(lmin, lmax, lmax, good_triplets, pmod)
+        if F.mpi_rank == 0:
+            num_pass = F.bins['num_pass_full']
+            first_pass = F.bins['first_pass_full']
         
-        np.testing.assert_array_equal(good_triplets_exp, good_triplets)
+            good_triplets_exp = first_pass[num_pass.astype(bool)]
+            good_triplets = np.zeros_like(good_triplets_exp)
 
+            tools.get_good_triplets(lmin, lmax, lmax, good_triplets, pmod)
+            
+            np.testing.assert_array_equal(good_triplets_exp, good_triplets)
+
+    def test_init_cosmo(self):
+                
+        F = Fisher(self.test_dir)
+
+        self.assertEqual(F.cosmo['init_cosmo'], False)
+
+        lmax = 10
+        acc_opts  = dict(AccuracyBoost=1,
+                         lSampleBoost=1,
+                         lAccuracyBoost=1)
+
+        F.init_cosmo(lmax=lmax, verbose=True, **acc_opts)
+
+        self.assertEqual(F.cosmo['init_cosmo'], True)
+
+        self.assertTrue(F.cosmo.has_key('transfer'))
+        self.assertTrue(F.cosmo.has_key('cls'))
+        self.assertTrue(F.cosmo.has_key('opts'))
+        
+        self.assertEqual(
+            F.cosmo['opts']['acc']['AccuracyBoost'], 1)
+
+        self.assertEqual(
+            F.cosmo['opts']['acc']['lSampleBoost'], 1)
+
+        self.assertEqual(
+            F.cosmo['opts']['acc']['lAccuracyBoost'], 1)
+
+    def test_get_cosmo(self):
+        
+        lmax = 10
+        acc_opts  = dict(AccuracyBoost=1,
+                         lSampleBoost=1,
+                         lAccuracyBoost=1)
+
+        F = Fisher(self.test_dir)
+        F.get_cosmo(lmax=lmax, **acc_opts)

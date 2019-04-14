@@ -7,8 +7,177 @@ import numpy as np
 from scipy.io import FortranFile
 import os
 import sys
+import camb
+import tools
 
 opj = os.path.join
+
+def run_camb(lmax, k_eta_fac=5, AccuracyBoost=3, lSampleBoost=2, 
+             lAccuracyBoost=2, verbose=True):
+    '''
+    Run camb to get transfer functions and power spectra.
+
+    Arguments
+    ---------
+    lmax : int
+        Max multipole used in calculation transfer functions.
+
+    Keyword arguments
+    -----------------
+    k_eta_fac : scalar
+        Determines k_eta_max for transfer functions through
+        k_eta_max = k_eta_fac * lmax. (default : 5)
+    AccuracyBoost : int
+        Overall accuracy CAMB, pick 1 to 3. (default : 3)
+    lSampleBoost : int
+        Factor determining multipole sampling of transfer 
+        functions, pick 1 to 50. (default : 2)
+    lAccuracyBoost : int
+        Factor determining truncation of Boltzmann hierarchy,
+        pick 1 to 3 (default : 2)
+    verbose : bool
+
+    Returns
+    -------
+    transfer : dict
+        Contains transfer functions, wavenumbers, multipoles.
+        Transfer function have shape (numsources, lmax-1, k_size)
+        numsources is 3 for lensed scalar (T, E, P) and 3 for
+        tensor (T, E, B).
+    cls : dict
+        Contains power spectra and corresponding multipoles.
+            cls : dict
+                TT, EE, BB, TE spectra, shape: (4, lmax-1)
+            ells : ndarray
+    opts : dict
+        Contains accuracy, cosmology and primordial
+        options.
+    '''
+
+    transfer = {}
+    cls = {}
+    opts = {}
+
+    # Accuracy options.
+    acc_opts = dict(AccuracyBoost=AccuracyBoost,
+                    lSampleBoost=lSampleBoost, 
+                    lAccuracyBoost=lAccuracyBoost, 
+                    DoLateRadTruncation=False)
+
+
+
+    # Hardcoded LCDM+ parameters.
+    cosmo_opts = dict(H0=67.66, 
+                       TCMB=2.7255,
+                       YHe=0.24,
+                       standard_neutrino_neff=True,
+                       ombh2=0.02242, 
+                       omch2=0.11933, 
+                       tau=0.0561,
+                       mnu=0.06, 
+                       omk=0)
+
+    prim_opts = dict(ns=0.9665,
+                     r=1.,
+                     pivot_scalar=0.05,
+                     As=2.1056e-9,
+                     nt=0, 
+                     parameterization=2)
+
+    pars = camb.CAMBparams()
+    pars.set_cosmology(**cosmo_opts)
+    pars.InitPower.set_params(**prim_opts)
+    pars.set_accuracy(**acc_opts)
+
+    pars.WantScalars = True
+    pars.WantTensors = True
+
+    # CAMB becomes unstable for too low ell and k.
+    lmax = max(300, lmax)
+    max_eta_k = k_eta_fac * lmax
+    max_eta_k = max(max_eta_k, 1000)
+    
+    pars.max_l = lmax
+    pars.max_l_tensor = lmax
+    pars.max_eta_k = max_eta_k
+    pars.max_eta_k_tensor = max_eta_k
+
+    pars.AccurateBB = True
+    pars.AccurateReionization = True
+    pars.AccuratePolarization = True
+
+
+    acc_opts['k_eta_fac'] = k_eta_fac
+    opts['acc'] = acc_opts
+    opts['cosmo'] = cosmo_opts
+    opts['prim'] = prim_opts
+    
+    if pars.validate() is False:
+        raise ValueError('Invalid CAMB input')
+
+    if verbose:
+        print('Calculating transfer functions\n')
+        print('lmax: {} \nmax_eta_k : {} \nAccuracyBoost : {} \n'
+              'lSampleBoost : {} \nlAccuracyBoost : {}\n'.format(
+                  lmax, max_eta_k, AccuracyBoost, lSampleBoost, 
+                  lAccuracyBoost))
+
+    data = camb.get_transfer_functions(pars)
+    transfer_s = data.get_cmb_transfer_data('scalar')
+    transfer_t = data.get_cmb_transfer_data('tensor')
+
+    if verbose:
+        print('Calculating power spectra')
+
+    data.calc_power_spectra()
+    cls_camb = data.get_cmb_power_spectra(lmax=None, CMB_unit='muK', 
+                                          raw_cl=True)
+
+    # CAMB cls are column-major, so convert.
+    for key in cls_camb:
+        cls_cm = cls_camb[key]
+        n_ell, n_pol = cls_cm.shape # 2d tuple.
+        cls_camb[key] = cls_cm.reshape(n_pol, n_ell)
+
+    ells_cls = np.arange(2, n_ell + 2)
+    cls['ells'] = ells_cls
+    cls['cls'] = cls_camb
+
+    # We need to modify scalar E-mode and tensor I transfer functions, 
+    # see Zaldarriaga 1997 eq. 18 and 39. (CAMB applies these factors
+    # at a later stage).
+    ells = transfer_s.l
+    # CAMB ells are in int32, gives nan in sqrt, so convert first.
+    ells = ells.astype(int) 
+    prefactor = np.sqrt((ells + 2) * (ells + 1) * ells * (ells - 1))
+    
+    transfer_s.delta_p_l_k[1,...] *= prefactor[:,np.newaxis]
+    transfer_t.delta_p_l_k[0,...] *= prefactor[:,np.newaxis]
+
+    # both scalar and tensor have to be scaled with monopole in uK
+    transfer_s.delta_p_l_k *= (pars.TCMB * 1e6)
+    transfer_t.delta_p_l_k *= (pars.TCMB * 1e6)
+
+    # Scale tensor transfer by 1/4 to correct for CAMB output.
+    transfer_t.delta_p_l_k /= 4.
+
+    # Check for nans.
+    if tools.has_nan(transfer_s.delta_p_l_k):
+        raise ValueError('nan in scalar transfer')
+    if tools.has_nan(transfer_t.delta_p_l_k):
+        raise ValueError('nan in tensor transfer')
+    if tools.has_nan(transfer_s.q):
+        raise ValueError('nan in k array')
+
+    transfer['scalar'] = transfer_s.delta_p_l_k
+    transfer['tensor'] = transfer_t.delta_p_l_k
+    transfer['k'] = transfer_s.q
+    transfer['ells'] = ells # sparse and might differ from cls['ells']
+
+    print(transfer['k'].shape)
+    print(transfer['tensor'].shape)
+
+    return transfer, cls, opts
 
 def read_camb_output(source_dir, ttype='scalar', high_ell=False):
     '''

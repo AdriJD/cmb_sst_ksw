@@ -55,8 +55,8 @@ def get_cls(cls_path, lmax, A_lens=1, no_ee=False, no_tt=False):
 
     return cls_lensed, ells
 
-def run(prim_template='equilateral', out_dir=None, camb_dir=None,
-        lmin=2, lmax=5000):
+def run(prim_template='local', out_dir=None):
+
     '''    
     Calculate and save bins, beta and bispec. Then calculate fisher.
 
@@ -64,39 +64,52 @@ def run(prim_template='equilateral', out_dir=None, camb_dir=None,
     ---------
     prim_template : str
     out_dir : str
-    camb_dir : str
     lmin : int
     lmax : int
     '''
 
-    tag = 'l{}'.format(lmax)
-    
-    camb_opts = dict(camb_out_dir = camb_dir,
-                     tag='',
-                     lensed=False,
-                     high_ell=False,
-                     interp_factor=None)
-
     F = Fisher(out_dir)
 
-    F.get_camb_output(**camb_opts)
-    F.get_bins(lmin=lmin, lmax=lmax, load=True,
-                parity='odd', verbose=True, tag=tag)
+#    beta_tag = 'r1_i1_l5200_16_7'
+#    bins_tag = '5200'
+#    cosmo_tag = '5200_16_7'
+#    bispec_tag = '5200_16_7'
 
-    interp_factor = 1
-    radii_factor = 10
-    beta_tag = 'r{}_i{}_l{}'.format(radii_factor, interp_factor, lmax)
+    beta_tag = 'r1_i1_l500_16_16'
+    bins_tag = '500'
+    cosmo_tag = '500_16_16'
+    bispec_tag = '500_16_16'
 
-    radii = F.get_updated_radii()
-    radii = radii[::radii_factor]
+    F.get_cosmo(load=True, tag=cosmo_tag, verbose=True)
+
+    F.get_bins(load=True, parity='odd', verbose=True, tag=bins_tag)
+ 
+    F.get_beta(load=True, tag=beta_tag, verbose=True)
+
+    F.get_binned_bispec(prim_template, load=False, tag=bispec_tag)
 
 
-    F.get_beta(func=prim_template, radii=radii, verbose=True, optimize=True,
-               interp_factor=interp_factor, load=True, sparse=True, tag=beta_tag)
 
-    F.get_binned_bispec('local', load=True, tag=tag)
+    return
 
-    cls, ells = get_cls(camb_dir, lmax, A_lens=1, no_ee=False, no_tt=False)
+#    F.get_camb_output(**camb_opts)
+#    F.get_bins(lmin=lmin, lmax=lmax, load=True,
+#                parity='odd', verbose=True, tag=tag)
+
+#    interp_factor = 1
+#    radii_factor = 10
+#    beta_tag = 'r{}_i{}_l{}'.format(radii_factor, interp_factor, lmax)
+
+#    radii = F.get_updated_radii()
+#    radii = radii[::radii_factor]
+
+
+#    F.get_beta(func=prim_template, radii=radii, verbose=True, optimize=True,
+#               interp_factor=interp_factor, load=True, sparse=True, tag=beta_tag)
+
+
+
+    cls, ells = get_cls(camb_dir, lmax, A_lens=1, no_ee=False, no_tt=False) # CHANGE
 
     invcov, cov = F.get_invcov(ells, cls, return_cov=True)    
     f_i = F.interp_fisher(invcov, ells, lmin=2, lmax=lmax, verbose=2)
@@ -119,13 +132,14 @@ if __name__ == '__main__':
     # out_dir = opj(base_dir, '20180911_sst/beta_sparse_ell')
     #out_dir = opj(base_dir, '20181123_sst')
     #out_dir = opj(base_dir, '20181214_sst_debug')
-    out_dir = opj(base_dir, '20181219_sst_interp')
+    #out_dir = opj(base_dir, '20181219_sst_interp')
+    out_dir = opj(base_dir, '20190411_beta')
 
     # camb_dir = opj(base_dir, '20171217_sst/camb_output/high_acy/sparse_5000')
     # camb_dir = opj(base_dir, '20171217_sst/camb_output/high_acy/nolens_4000')
     # camb_dir = opj(base_dir, '20171217_sst/camb_output/high_acy/nolens_5200')
-    camb_dir = opj(base_dir, '20180911_sst/camb_output/lensed_r0_4000')
+    # camb_dir = opj(base_dir, '20180911_sst/camb_output/lensed_r0_4000')
     # camb_dir = opj(base_dir, '20171217_sst/camb_output/high_acy/sparse_5000')
 
-    run(out_dir=out_dir, camb_dir=camb_dir, lmax=3500)
+    run(out_dir=out_dir)
 

@@ -34,7 +34,7 @@ F = fisher.Fisher(**camb_opts)
 #F.get_noise_curves(cross_noise=False, **noise_opts)
 F.init_pol_triplets()
 
-#print F.depo
+#print F.cosmo
 
 # Avoid rerunning init_bins(), so load up bins
 bins = np.load(opj(in_dir, 'bins.npy'))
@@ -63,9 +63,9 @@ nls[2] = nl_bb
 nls[3] = np.zeros_like(nl_bb)
 nls[4] = np.zeros_like(nl_bb)
 nls[5] = np.zeros_like(nl_bb)
-F.depo['nls'] = nls
-F.depo['nls_lmin'] = int(lmin)
-F.depo['nls_lmax'] = int(lmax)
+F.cosmo['nls'] = nls
+F.cosmo['nls_lmin'] = int(lmin)
+F.cosmo['nls_lmax'] = int(lmax)
 
 F.get_binned_invcov(bins=bins)
 

@@ -18,7 +18,11 @@ from sst import Fisher
 
 opj = os.path.join
 
-def run(prim_template='equilateral', out_dir=None, camb_dir=None, lmin=2, lmax=5000):
+#def run(prim_template='equilateral', out_dir=None, camb_dir=None,
+#        lmin=2, lmax=5000):
+def run(prim_template='equilateral', out_dir=None,
+        lmin=2, lmax=5000):
+
     '''    
     Calculate and save beta.
 
@@ -31,28 +35,34 @@ def run(prim_template='equilateral', out_dir=None, camb_dir=None, lmin=2, lmax=5
     lmax : int
     '''
 
-    camb_opts = dict(camb_out_dir = camb_dir,
-                     tag='',
-                     lensed=False,
-                     high_ell=False,
-                     interp_factor=None)
+#    camb_opts = dict(camb_out_dir = camb_dir,
+#                     tag='',
+#                     lensed=False,
+#                     high_ell=False,
+#                     interp_factor=None)
 
     F = Fisher(out_dir)
 
-    F.get_camb_output(**camb_opts)
-    F.get_bins(lmin=lmin, lmax=lmax, load=True,
-                parity='odd', verbose=True)
-
+    ac = 16
+    ke = 10
     interp_factor = 1
-    radii_factor = 5
-    beta_tag = 'r{}_i{}_l{}'.format(radii_factor, interp_factor, lmax)
+    radii_factor = 1
+
+
+#    F.get_camb_output(**camb_opts)
+    F.get_cosmo(lmax=lmax, load=True, tag='{}_{}_{}'.format(lmax, ac, ke),
+                AccuracyBoost=ac, k_eta_fac=ke)
+    F.get_bins(lmin=lmin, lmax=lmax, load=True,
+                parity='odd', verbose=True, tag=str(lmax))
+ 
+    beta_tag = 'r{}_i{}_l{}_{}_{}'.format(radii_factor, interp_factor, lmax, ac, ke)
 
     radii = F.get_updated_radii()
     radii = radii[::radii_factor]
 
 
-    F.get_beta(func=prim_template, radii=radii, verbose=True, optimize=True,
-               interp_factor=interp_factor, load=False, sparse=True, tag=beta_tag)
+    F.get_beta(func=prim_template, radii=radii, verbose=True, optimize=False,
+               interp_factor=interp_factor, load=False, sparse=False, tag=beta_tag)
     exit()
     F.get_binned_bispec('equilateral', load=False)
     if F.mpi_rank == 0:
@@ -74,13 +84,14 @@ if __name__ == '__main__':
     # out_dir = opj(base_dir, '20180911_sst/beta')
     # out_dir = opj(base_dir, '20180911_sst/beta_sparse_ell')
 #    out_dir = opj(base_dir, '20181123_sst')
-    out_dir = opj(base_dir, '20181214_sst_debug')
+#    out_dir = opj(base_dir, '20181214_sst_debug')
+    out_dir = opj(base_dir, '20190411_beta')
 
     # camb_dir = opj(base_dir, '20171217_sst/camb_output/high_acy/sparse_5000')
     # camb_dir = opj(base_dir, '20171217_sst/camb_output/high_acy/nolens_4000')
     # camb_dir = opj(base_dir, '20171217_sst/camb_output/high_acy/nolens_5200')
-    camb_dir = opj(base_dir, '20180911_sst/camb_output/lensed_r0_4000')
+    # camb_dir = opj(base_dir, '20180911_sst/camb_output/lensed_r0_4000')
     # camb_dir = opj(base_dir, '20171217_sst/camb_output/high_acy/sparse_5000')
 
-    run(out_dir=out_dir, camb_dir=camb_dir, lmax=400)
+    run(out_dir=out_dir, lmax=2000) 
 

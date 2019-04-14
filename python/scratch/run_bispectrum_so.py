@@ -74,9 +74,9 @@ def run(prim_template):
         np.save(opj(ana_dir, 'bispectrum/run_so', prim_template,
                     'first_pass.npy'), F.first_pass)
         np.save(opj(ana_dir, 'bispectrum/run_so', prim_template,
-                    'beta_s.npy'), F.depo['scalar']['b_beta'])
+                    'beta_s.npy'), F.cosmo['scalar']['b_beta'])
         np.save(opj(ana_dir, 'bispectrum/run_so', prim_template,
-                    'beta_t.npy'), F.depo['tensor']['b_beta'])
+                    'beta_t.npy'), F.cosmo['tensor']['b_beta'])
         np.save(opj(ana_dir, 'bispectrum/run_so', prim_template,
                     'pol_trpl.npy'), F.pol_trpl)
 

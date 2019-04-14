@@ -19,12 +19,232 @@ class ScalarFormatterForceFormat(ScalarFormatter):
     def _set_format(self):
         self.format = '%1d'
 
+
+def plot_gen_alpha(beta_dir, img_dir, ell,
+                   rmin=12900, rmax=14600):
+    '''
+    Plot generalized alpha as function of r.
+
+    Arguments
+    ---------
+    beta_dir : str
+       Directory containing beta .pkl files.
+    img_dir : str
+       Output directory
+    ell : int
+        Central multipole.
+    
+    Keyword arguments
+    -----------------
+    rmin, rmax : scalar
+        Min max r for plot.    
+    '''
+
+
+    linestyles = ['--', '-', '-.']
+    alphas = [0.6, 1, 0.6]
+    colors = ['C1', 'C0', 'C2']
+
+    lidx = ell - 2
+    xlim = [rmin, rmax]
+
+    # Scalar.
+    beta_tag_s = 'r1_i1_l5200_16_7'
+
+    beta_file = 'beta_{}.pkl'.format(beta_tag_s)
+    beta = np.load(opj(beta_dir, beta_file))
+    beta_s = beta['beta_s']
+    radii = beta['radii']
+
+    ridx = radii.size - 1
+    lmax = beta_s.shape[0] + 1
+    ells = np.arange(2, lmax+1)
+    dell = ells * (ells + 1) / 2. / np.pi
+
+    ridxs = np.arange(0, radii.size, 10)
+
+    L_range = [-1, 0, 1]
+
+    fig, axs = plt.subplots(ncols=1, nrows=2, sharey=False, sharex=True, 
+                            figsize=(4, 3), squeeze=False)
+    for pidx, pol in enumerate(['I', 'E']):
+        for Lidx, eLL in enumerate(L_range):
+
+            ls = linestyles[Lidx]
+            alpha = alphas[Lidx]
+
+            plot_opts = dict(ls=ls, alpha=alpha)
+            if eLL == 0:
+                label = r'$ \ \ \: '+'{0:d}'.format(eLL)+'$'
+            else:
+                label = r'$'+'{0:+d}'.format(eLL)+'$'
+            axs[pidx,0].plot(radii, radii ** (2) * beta_s[lidx,eLL+2,1,pidx,:],
+                             label=label, 
+                             color='C0', **plot_opts)
+        axs[pidx,0].set_xlim(xlim)
+        axs[pidx,0].text(0.83, 0.77, r'$X='+pol+'$', transform=axs[pidx,0].transAxes)
+
+    fig.text(0.01, 0.5,
+             r'$r^{2} \, \mathcal{K}[1]_{\ell, L} \ [\mu \mathrm{K}\ \mathrm{Mpc}^{-1}]$',
+             ha='center', va='center', rotation='vertical')
+
+    axs[1,0].set_xlabel(r'comoving radial distance $r$  [$\mathrm{Mpc}]$')
+    axs[0,0].set_title(r'$Z = \zeta$')
+    axs[0,0].legend(ncol=1, title=r'$L - \ell\ (\ell = '+str(ell)+')$', frameon=True,
+                    markerscale=0.5, handletextpad=0.3, handlelength=2)
+    fig.subplots_adjust(hspace=0, wspace=None)
+    for ax in axs.flatten():
+        ax.tick_params(axis='both', direction='in', top=True, right=True)
+        ax.ticklabel_format(axis='y', style='sci', scilimits=(2,2),
+                             useMathText=True)
+    fig.savefig(opj(img_dir, 'alpha_scal_{}.pdf'.format(ell)),
+                dpi=300, bbox_inches='tight')
+    plt.close(fig)
+
+
+    # Tensor I, E.
+    alpha = alphas[0]
+    alpha = 0.9
+    alphas = [1, 1, 1]
+
+    beta_tag_ti = 'r1_i1_l2000_16_3'
+    beta_file = 'beta_{}.pkl'.format(beta_tag_ti)
+    beta = np.load(opj(beta_dir, beta_file))
+    radii = beta['radii']
+    beta_ti = beta['beta_t']
+    lmax = beta_ti.shape[0] + 1
+
+    beta_tag_te = 'r1_i1_l2000_16_5'
+    beta_file = 'beta_{}.pkl'.format(beta_tag_te)
+    beta = np.load(opj(beta_dir, beta_file))
+    beta_te = beta['beta_t']
+
+    ridx = radii.size - 1
+    ells = np.arange(2, lmax+1)
+    dell = ells * (ells + 1) / 2. / np.pi
+
+    ridxs = np.arange(0, radii.size, 10)
+
+    L_range = [-2, 0, 2]
+
+    fig, axs = plt.subplots(ncols=1, nrows=2, sharey=False, sharex=True, 
+                            figsize=(4, 3), squeeze=False)
+    for pidx, pol in enumerate(['I', 'E']):
+        for Lidx, eLL in enumerate(L_range):
+
+            ls = linestyles[Lidx]
+            alpha = alphas[Lidx]
+
+            plot_opts = dict(ls=ls, alpha=alpha)
+            if eLL == 0:
+                label = r'$ \ \ \: '+'{0:d}'.format(eLL)+'$'
+            else:
+                label = r'$'+'{0:+d}'.format(eLL)+'$'
+            if pol == 'I':
+                beta_plot = beta_ti
+            if pol == 'E':
+                beta_plot = beta_te
+
+            axs[pidx,0].plot(radii, radii ** (2) * beta_plot[lidx,eLL+2,1,pidx,:],
+                             label=label, 
+                             color='C1', **plot_opts)
+        axs[pidx,0].set_xlim(xlim)
+        axs[pidx,0].text(0.83, 0.77, r'$X='+pol+'$', transform=axs[pidx,0].transAxes)
+
+    fig.text(0.01, 0.5,
+             r'$r^{2} \, \mathcal{K}[1]_{\ell, L} \ [\mu \mathrm{K}\ \mathrm{Mpc}^{-1}]$',
+             ha='center', va='center', rotation='vertical')
+
+    axs[1,0].set_xlabel(r'comoving radial distance $r$  [$\mathrm{Mpc}]$')
+    axs[0,0].set_title(r'$Z = h$')
+    axs[0,0].legend(ncol=1, title=r'$L - \ell\ (\ell = '+str(ell)+')$', frameon=True,
+                    markerscale=0.5, handletextpad=0.3, handlelength=2)
+    fig.subplots_adjust(hspace=0, wspace=None)
+    for ax in axs.flatten():
+        ax.tick_params(axis='both', direction='in', top=True, right=True)
+        ax.ticklabel_format(axis='y', style='sci', scilimits=(2,2),
+                             useMathText=True)
+    fig.savefig(opj(img_dir, 'alpha_tens_ie_{}.pdf'.format(ell)),
+                dpi=300, bbox_inches='tight')
+    plt.close(fig)
+
+    # Tensor B.
+    alphas = [1, 1]
+    linestyles = ['--', '-.']
+
+#    beta_tag_tb = 'r1_i1_l1500_16_5'
+    beta_tag_tb = 'r1_i1_l2000_16_5'
+    beta_file = 'beta_{}.pkl'.format(beta_tag_tb)
+    beta = np.load(opj(beta_dir, beta_file))
+    radii = beta['radii']
+    beta_tb = beta['beta_t']
+    lmax = beta_ti.shape[0] + 1
+
+    ridx = radii.size - 1
+    ells = np.arange(2, lmax+1)
+    dell = ells * (ells + 1) / 2. / np.pi
+
+    ridxs = np.arange(0, radii.size, 10)
+
+    L_range = [-1, 1]
+
+    pidx = 2
+    pol = 'B'
+    fig, axs = plt.subplots(ncols=1, nrows=1, sharey=False, sharex=True, 
+                            figsize=(4, 1.5), squeeze=False)
+    for Lidx, eLL in enumerate(L_range):
+
+        ls = linestyles[Lidx]
+        alpha = alphas[Lidx]
+
+        plot_opts = dict(ls=ls, alpha=alpha)
+        if eLL == 0:
+            label = r'$ \ \ \: '+'{0:d}'.format(eLL)+'$'
+        else:
+            label = r'$'+'{0:+d}'.format(eLL)+'$'
+
+        axs[0,0].plot(radii, radii ** (2) * beta_tb[lidx,eLL+2,1,pidx,:],
+                         label=label, 
+                         color='C1', **plot_opts)
+        axs[0,0].set_xlim(xlim)
+        axs[0,0].text(0.83, 0.77, r'$X='+pol+'$', transform=axs[0,0].transAxes)
+
+    fig.text(0.01, 0.5,
+             r'$r^{2} \, \mathcal{K}[1]_{\ell, L} \ [\mu \mathrm{K}\ \mathrm{Mpc}^{-1}]$',
+             ha='center', va='center', rotation='vertical')
+
+    axs[0,0].set_xlabel(r'comoving radial distance $r$  [$\mathrm{Mpc}]$')
+    axs[0,0].set_title(r'$Z = h$')
+    axs[0,0].legend(ncol=1, title=r'$L - \ell\ (\ell = '+str(ell)+')$', frameon=True,
+                    markerscale=0.5, handletextpad=0.3, handlelength=2)
+    fig.subplots_adjust(hspace=0, wspace=None)
+    for ax in axs.flatten():
+        ax.tick_params(axis='both', direction='in', top=True, right=True)
+        ax.ticklabel_format(axis='y', style='sci', scilimits=(2,2),
+                             useMathText=True)
+    fig.savefig(opj(img_dir, 'alpha_tens_b_{}.pdf'.format(ell)),
+                dpi=300, bbox_inches='tight')
+    plt.close(fig)
+
+
 def plot_alpha_beta(beta_dir, img_dir, ell, beta_tag=None):
     '''
+    Plot generalized alpha and beta.
+    
+    Arguments
+    ---------
+    beta_dir : str
+       Directory containing beta_<beta_tag>.pkl files.
+    img_dir : str
+       Output directory
+    ell : int
+        Multipole to plot.
+
     Keyword arguments
     -----------------
     beta_tag : str, None
         If str, look for beta_<beta_tag>.pkl files.
+
     '''
 
 
@@ -55,18 +275,17 @@ def plot_alpha_beta(beta_dir, img_dir, ell, beta_tag=None):
     alphas = [0.4, 1, 0.4]
     colors = ['C1', 'C0', 'C2']
 
-    #xlim = [9000, 15500]
-    xlim = [12000, 15200]
+#    xlim = [8000, 15500]
+#    xlim = [12000, 15200]
+    xlim = [12500, 15000]
+#    xlim = [0, 25000]
     #xlim = None
 
+#    L_range = [-1, 0, 1]
     L_range = [-2, 0, 2]
-
-
     for pidx in [0, 1, 2]:
 
         # Alpha and beta as function of radius.
-
-
         fig, axs = plt.subplots(ncols=2, sharey=False, figsize=(10, 4))
         for Lidx, L in enumerate(L_range):
 
@@ -135,7 +354,8 @@ def plot_alpha_beta(beta_dir, img_dir, ell, beta_tag=None):
                              useMathText=True)
 
     #fig.subplots_adjust(right=0.8)
-    fig.savefig(opj(img_dir, 'alpha_scal.pdf'), dpi=300, bbox_inches='tight')
+    fig.savefig(opj(img_dir, 'alpha_scal_{}.pdf'.format(beta_tag)),
+                dpi=300, bbox_inches='tight')
     plt.close(fig)
 
 
@@ -169,7 +389,8 @@ def plot_alpha_beta(beta_dir, img_dir, ell, beta_tag=None):
         ax.ticklabel_format(axis='y', style='sci', scilimits=(-2,2))
         
         
-    fig.savefig(opj(img_dir, 'alpha_tens.pdf'), dpi=300) #bbox_inches='tight')
+    fig.savefig(opj(img_dir, 'alpha_tens_{}.pdf'.format(beta_tag)),
+                dpi=300) #bbox_inches='tight')
     plt.close(fig)
 
 
@@ -328,36 +549,59 @@ def alpha_at_ell(ell, beta_tag=None):
     ells = beta['ells']
 
     lidx = np.where(ells==ell)[0][0]
-    pidx = 0
+#    pidx = 1
     Lidx = 2
     kidx = 1 # alpha
 
-    fig, axs = plt.subplots(ncols=1, sharey=False)
-    axs.plot(radii, beta_s[lidx,Lidx,kidx,pidx,:])
-    axs.set_xlabel(r'Comoving radius $r$ [$\mathrm{Mpc}$]')
-    axs.set_ylabel(r'$\alpha_{\ell}(r)$')
-    axs.set_title('scalar')
-    fig.tight_layout()
-    fig.savefig(opj(img_dir, 'alpha_scalar_p{}_L{}_l{}.png'.format(
-        pidx, Lidx, ell)))
-    plt.close(fig)
+    for pidx in [0, 1, 2]:
+        if pidx < 2:
+            fig, axs = plt.subplots(ncols=1, sharey=False)
+            axs.plot(radii, beta_s[lidx,Lidx,kidx,pidx,:])
+            axs.set_xlabel(r'Comoving radius $r$ [$\mathrm{Mpc}$]')
+            axs.set_ylabel(r'$\alpha_{\ell}(r)$')
+            axs.set_title('scalar')
+            fig.tight_layout()
+            fig.savefig(opj(img_dir, 'alpha_scalar_p{}_L{}_l{}.png'.format(
+                pidx, Lidx, ell)))
+            plt.close(fig)
 
-    # zoom in around recombination
-    ridx_low = np.searchsorted(radii, 13000, side="left")
-    ridx_hi = np.searchsorted(radii, 15000, side="left")
+        fig, axs = plt.subplots(ncols=1, sharey=False)
+        axs.plot(radii, beta_t[lidx,Lidx,kidx,pidx,:])
+        axs.set_xlabel(r'Comoving radius $r$ [$\mathrm{Mpc}$]')
+        axs.set_ylabel(r'$\alpha_{\ell}(r)$')
+        axs.set_title('scalar')
+        fig.tight_layout()
+        fig.savefig(opj(img_dir, 'alpha_tensor_p{}_L{}_l{}.png'.format(
+            pidx, Lidx, ell)))
+        plt.close(fig)
 
-    
-    fig, axs = plt.subplots(ncols=1, sharey=False)
-    axs.plot(radii[ridx_low:ridx_hi], beta_s[lidx,Lidx,kidx,pidx,ridx_low:ridx_hi])
-    axs.set_xlabel(r'Comoving radius $r$ [$\mathrm{Mpc}$]')
-    axs.set_ylabel(r'$\alpha_{\ell}(r)$')
-    axs.set_title('scalar')
-    fig.tight_layout()
-    fig.savefig(opj(img_dir, 'alpha_scalar_zoom_p{}_L{}_l{}.png'.format(
-        pidx, Lidx, ell)))
-    plt.close(fig)
+        # zoom in around recombination
+        ridx_low = np.searchsorted(radii, 13000, side="left")
+        ridx_hi = np.searchsorted(radii, 15000, side="left")
 
+        if pidx < 2:
+            fig, axs = plt.subplots(ncols=1, sharey=False)
+            axs.plot(radii[ridx_low:ridx_hi], 
+                     beta_s[lidx,Lidx,kidx,pidx,ridx_low:ridx_hi])
+            axs.set_xlabel(r'Comoving radius $r$ [$\mathrm{Mpc}$]')
+            axs.set_ylabel(r'$\alpha_{\ell}(r)$')
+            axs.set_title('scalar')
+            fig.tight_layout()
+            fig.savefig(opj(img_dir, 'alpha_scalar_zoom_p{}_L{}_l{}.png'.format(
+                pidx, Lidx, ell)))
+            plt.close(fig)
 
+        fig, axs = plt.subplots(ncols=1, sharey=False)
+        axs.plot(radii[ridx_low:ridx_hi], beta_t[lidx,Lidx,kidx,pidx,ridx_low:ridx_hi])
+        axs.set_xlabel(r'Comoving radius $r$ [$\mathrm{Mpc}$]')
+        axs.set_ylabel(r'$\alpha_{\ell}(r)$')
+        axs.set_title('scalar')
+        fig.tight_layout()
+        fig.savefig(opj(img_dir, 'alpha_tensor_zoom_p{}_L{}_l{}.png'.format(
+            pidx, Lidx, ell)))
+        plt.close(fig)
+
+    pidx = 0 # CAMB only has scalar T
     # compare to camb
     ana_dir = '/mn/stornext/d8/ITA/spider/adri/analysis/20171217_sst/camb_output/beta/'
     alpha = np.load(opj(ana_dir, 'test__alpha.npy'))
@@ -401,10 +645,12 @@ if __name__ == '__main__':
 #    beta_dir = opj(base_dir, '20180911_sst/beta_sparse_ell/equilateral')
 #    beta_dir = opj(base_dir, '20181123_sst/precomputed')
 #    img_dir = opj(base_dir, '20181123_sst/img/beta/')
-    beta_dir = opj(base_dir, '20181214_sst_debug/precomputed')
-    img_dir = opj(base_dir, '20181214_sst_debug/img/beta/')
+#    beta_dir = opj(base_dir, '20181214_sst_debug/precomputed')
+    beta_dir = opj(base_dir, '20190411_beta/precomputed')
+    img_dir = opj(base_dir, '20190411_beta/img/')
 
-    plot_alpha_beta(beta_dir, img_dir, 20, beta_tag='r5_i1_l400')
+#    plot_alpha_beta(beta_dir, img_dir, 60, beta_tag='r1_i1_l2000_16_10')
     # plot_alpha_beta_matrix(beta_dir, img_dir)
 #    alpha_at_r(13306.4, beta_tag='r1_i40_l4000')
-    alpha_at_ell(20, beta_tag='r5_i1_l400')
+#    alpha_at_ell(60, beta_tag='r1_i1_l2000_16_10')
+    plot_gen_alpha(beta_dir, img_dir, 1800)
