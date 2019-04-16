@@ -1954,13 +1954,6 @@ class Fisher(Template, PreCalc):
         '''
 
         # All the tuples for single B-mode bispectra.
-#        L_tups = [(+1, +1, +1),
-#                  (+1, -1, -1),
-#                  (-1, +1, +1),
-#                  (-1, -1, -1),
-#                  (+1, -1, +1),
-#                  (-1, +1, -1)]
-
         L_tups = [(+1, +1, +1),
                   (+1, -1, -1),
                   (-1, +1, +1),
@@ -3175,3 +3168,50 @@ class Fisher(Template, PreCalc):
         self.barrier()
 
         return fisher
+
+    def save_fisher(self, fisher, r=0, tag=None):
+        '''
+        Write Fisher information and used options to disk.
+        
+        Arguments
+        ---------
+        fisher : float
+
+        Keyword arguments
+        -----------------
+        r : float
+            Tensor-to-scalar ratio. Used for fnl x sqrt(r)
+        tag : str, None
+            If str, write f_<tag>.pkl. (default : None)
+
+        Notes
+        -----
+        Results are written to `fisher` subdir as pickle files.
+        '''
+
+        
+        if self.mpi_rank == 0:
+
+            outdir = self.subdirs['fisher']
+
+            sigma_fnl = 1 / np.sqrt(fisher)
+            sigma_fnl_sqrtr = sigma_fnl * np.sqrt(r)
+
+            fisher_opts = dict(fisher=fisher,
+                               sigma_fnl=sigma_fnl,
+                               sigma_fnl_sqrtr=sigma_fnl_sqrtr)
+
+            if tag is None:
+                fisher_file = opj(outdir, 'f.pkl')
+            else:
+                fisher_file = opj(outdir, 'f_{}.pkl'.format(tag))
+
+            # Store in pickle file.            
+            with open(fisher_file, 'wb') as handle:
+                pickle.dump(fisher_opts, handle,
+                            protocol=pickle.HIGHEST_PROTOCOL)
+
+        # Other ranks can chill for a bit here.
+        self.barrier()
+
+        return

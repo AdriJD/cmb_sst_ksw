@@ -115,19 +115,23 @@ def run(prim_template='local', out_dir=None):
     F.get_beta(load=True, tag=beta_tag, verbose=True)
 
     F.get_binned_bispec(prim_template, load=True, tag=bispec_tag)
-
-    cls, ells = get_cls(F.cosmo, r=0, A_lens=0.1)
+    
+    r = 0.01
+    A_lens = 0.1
+    cls, ells = get_cls(F.cosmo, r=r, A_lens=A_lens)
 
     invcov, cov = F.get_invcov(ells, cls, return_cov=True)    
 
-    lmax = 4500
-    lmax_outer = 400
+    lmax = 4900
+    lmax_outer = 200
     f_i = F.interp_fisher(invcov, ells, lmin=2, lmax=lmax, lmax_outer=lmax_outer, 
                           verbose=2)
 
     if F.mpi_rank == 0:        
         print(f_i)
 
+    F.save_fisher(f_i, r=r, tag=None)
+    
     return
 
 if __name__ == '__main__':
