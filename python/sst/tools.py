@@ -307,7 +307,7 @@ def estimate_n_tuples(ell1, lmax):
 
     return area + perimeter
 
-def rank_bins(bins, n_per_ell, ells):
+def rank_bins(bins, n_per_ell, ells, lmax_outer=None):
     '''
     Return array of bin indices that will sort `bins` 
     from small to large number of good tuples.
@@ -320,16 +320,19 @@ def rank_bins(bins, n_per_ell, ells):
         Number of valid tuples per multipole.
     ells : array-like
         Multipoles (same lenght as n_tuples_per_ell)
+    lmax_outer : int, None
+        Upper limit of ell1 in fisher loop.
 
     Returns
     -------
     bidx_sorted : ndarray
         Index array such that bins[bidx_sorted] is sorted.
+        bidx_sorted might be shorter than bins if lmax_outer
+        is given.
     n_per_bin : ndarray
         Binned version of n_per_ell (in original order).
     '''
 
-    
     bins_ext = np.empty(len(bins) + 1, dtype=float)
     bins_ext[:-1] = np.asarray(bins, dtype=float)
     bins_ext[-1] = bins[-1] + 0.1
@@ -337,6 +340,12 @@ def rank_bins(bins, n_per_ell, ells):
                                 bins=bins_ext, statistic='sum')
 
     bidx_sorted = np.argsort(n_per_bin)
+
+    # Discard bidx above max_bidx.
+    # Determine max_bidx if lmax_outer is given.
+    if lmax_outer is not None:
+        max_bidx = np.where(bins <= lmax_outer)[0][-1] 
+        bidx_sorted = bidx_sorted[bidx_sorted <= max_bidx]
     
     return bidx_sorted, n_per_bin
 
@@ -373,6 +382,7 @@ def distribute_bins_simple(bidx_sorted, n_per_bin, size):
     check = [item for sublist in bidx_per_rank for item in sublist]
     check = np.asarray(check)
     num_bins = n_per_bin_sorted.size
+    # Still valid if n_per_bin_sorted is about truncated bins.
     if not np.array_equal(np.unique(check), np.arange(num_bins)):
         print(np.unique(check))
         print(np.arange(num_bins))
@@ -524,8 +534,12 @@ def get_good_triplets(bmin, bmax, lmax, good_triplets, pmod):
     bmax : int
     lmax : int
     good_triplets : ndarray, dtype=int
-        Shape (N, 3)
+        Shape (N, 3). Changed in-place
     pmod : int
+
+    Notes
+    -----
+    N = number of triplets. 
     '''
 
     ret = _get_good_triplets(bmin, bmax, lmax, good_triplets, pmod)
@@ -545,6 +559,7 @@ def _get_good_triplets(bmin, bmax, lmax, good_triplets, pmod):
     bmin : int
     bmax : int
     lmax : int
+        lmax in bins dict.
     good_triplets : ndarray, dtype=int
         Shape (N, 3)
     pmod : int
@@ -852,10 +867,21 @@ def _fisher_loop(bispec, triplets, ic1, ic2, ic3, lmin):
 #        ic123_t *= ic3[lidx3]
 
         ic123_t = ic1[lidx1] * ic2[lidx2] * ic3[lidx3]
+        
+#        if has_nan(ic123_t):
+#            print('lidx1')
+#            print(has_nan(ic1[lidx1]))
+
+#            print('lidx2')
+#            print(has_nan(ic2[lidx2]))
+
+#            print(lidx3)
+#            print(has_nan(ic3[lidx3]))
+
+
 
         f = contract_bcb(b123, ic123_t)
         f *= one_over_delta(l1, l2, l3)
-
         fisher += f
         
     return fisher

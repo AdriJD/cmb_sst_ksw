@@ -98,6 +98,12 @@ def run(prim_template='equilateral', out_dir=None, camb_dir=None,
 
     cls, ells = get_cls(camb_dir, lmax, A_lens=1, no_ee=False, no_tt=False)
 
+    # NOTE NOTE
+#    cls[:3,:18] += 1e20
+#    cls[3,:] *= 3
+
+
+
     invcov, cov = F.get_invcov(ells, cls, return_cov=True)    
     f_i = F.interp_fisher(invcov, ells, lmin=2, lmax=lmax, verbose=2)
     if F.mpi_rank == 0:        
@@ -109,6 +115,7 @@ def run(prim_template='equilateral', out_dir=None, camb_dir=None,
 
     if F.mpi_rank == 0:
         f_n = F.naive_fisher(b_invcov, lmin=2, lmax=lmax)
+        print('naive')
         print(f_n)
 
 if __name__ == '__main__':
@@ -127,5 +134,5 @@ if __name__ == '__main__':
     camb_dir = opj(base_dir, '20180911_sst/camb_output/lensed_r0_4000')
     # camb_dir = opj(base_dir, '20171217_sst/camb_output/high_acy/sparse_5000')
 
-    run(out_dir=out_dir, camb_dir=camb_dir, lmax=3500)
+    run(out_dir=out_dir, camb_dir=camb_dir, lmax=120)
 

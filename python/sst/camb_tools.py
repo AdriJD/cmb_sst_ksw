@@ -129,11 +129,13 @@ def run_camb(lmax, k_eta_fac=5, AccuracyBoost=3, lSampleBoost=2,
     if verbose:
         print('Calculating power spectra')
 
+    # NOTE that l=0, l=1 are also included here.
     data.calc_power_spectra()
     cls_camb = data.get_cmb_power_spectra(lmax=None, CMB_unit='muK', 
                                           raw_cl=True)
 
     # CAMB cls are column-major, so convert.
+    # NOTE this is wrong. You need to do transpose + ascontingousarray
     for key in cls_camb:
         cls_cm = cls_camb[key]
         n_ell, n_pol = cls_cm.shape # 2d tuple.

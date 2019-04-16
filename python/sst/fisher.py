@@ -538,7 +538,6 @@ class PreCalc(MPIBase):
         np.testing.assert_array_equal(np.unique(bins), bins)
 
         self.bins['bins'] = bins
-        # NOTE
         self.bins['lmax'] = bins[-1]
         self.bins['lmin'] = bins[0]
 
@@ -1666,7 +1665,7 @@ class Fisher(Template, PreCalc):
                     if ang_tss != 0.:
                         ang_tss *= wig9jj( [(2*ell1),  (2*ell2),  (2*ell3),
                                             (2*L1),  (2*L2),  (2*L3),
-                                            4,  2,  2] ) #NOTE HERE
+                                            4,  2,  2] ) 
 
                     else:
                         # don't waste time on 9j if zero anyway
@@ -2675,7 +2674,7 @@ class Fisher(Template, PreCalc):
 
         return fisher
 
-    def _mpi_scatter_for_fisher(self, bidx_per_rank):
+    def _mpi_scatter_for_fisher(self, bidx_per_rank, bidx_max=None):
         '''
         Scatter data required for interpolated fisher
         calculation from root to MPI ranks.
@@ -2685,6 +2684,12 @@ class Fisher(Template, PreCalc):
         bidx_per_rank : list of ndarrays
             Array of bin indices for each MPI rank
             (object present on all ranks).
+        
+        Keyword arguments
+        -----------------
+        bidx_max : int, None
+            Index of last bin. If None, use all bins.
+            (default : None)
 
         Returns
         -------
@@ -2704,7 +2709,14 @@ class Fisher(Template, PreCalc):
         
         size = self.mpi_size
         nptr = self.bispec['pol_trpl'].shape[0]
-        bins = self.bins['bins']
+
+        if bidx_max is not None:
+            bidx_end = bidx_max + 1
+            bins = self.bins['bins'][:bidx_end]
+        else:
+            bidx_end = None
+            bins = self.bins['bins']
+
         num_bins = bins.size
 
         # For use in loop.
@@ -2731,12 +2743,12 @@ class Fisher(Template, PreCalc):
                     bispec = self.bispec['bispec']
 
                     # Only use valid tuples.
-                    mask = n_pass_bool[b_start:b_stop,...]
+                    mask = n_pass_bool[b_start:b_stop,:bidx_end,:bidx_end]
 
                     # Select data
-                    f_pass_send = f_pass[b_start:b_stop,...][mask]
-                    bispec_send = bispec[b_start:b_stop,...][mask]
-                    num_triplets = np.sum(num_pass[bidx,...])
+                    f_pass_send = f_pass[b_start:b_stop,:bidx_end,:bidx_end][mask]
+                    bispec_send = bispec[b_start:b_stop,:bidx_end,:bidx_end][mask]
+                    num_triplets = np.sum(num_pass[bidx,:bidx_end,:bidx_end])
 
                     # First send meta-data.
                     array_size = np.sum(mask)
@@ -2779,11 +2791,11 @@ class Fisher(Template, PreCalc):
             for idx, bidx in enumerate(bidxs):
 
                 b_start, b_stop = tools.get_slice(bidx, num_bins)
-                mask = n_pass_bool[b_start:b_stop,...]
+                mask = n_pass_bool[b_start:b_stop,:bidx_end,:bidx_end]
 
-                f_pass = self.bins['first_pass_full'][b_start:b_stop,...][mask]
-                num_pass = self.bins['num_pass_full'][bidx,...]
-                bispec = self.bispec['bispec'][b_start:b_stop,...][mask]
+                f_pass = self.bins['first_pass_full'][b_start:b_stop,:bidx_end,:bidx_end][mask]
+                num_pass = self.bins['num_pass_full'][bidx,:bidx_end,:bidx_end]
+                bispec = self.bispec['bispec'][b_start:b_stop,:bidx_end,:bidx_end][mask]
 
                 num_triplets = np.sum(num_pass)
 
@@ -2793,7 +2805,7 @@ class Fisher(Template, PreCalc):
 
         return first_pass_per_bidx, bispec_per_bidx, num_triplets_per_bidx
     
-    def _init_triplets(self, bidx, num_triplets):
+    def _init_triplets(self, bidx, num_triplets, bidx_max=None):
         '''
         Return array of all good (l1,l2,l3) triplest given
         outer bin index.
@@ -2805,6 +2817,12 @@ class Fisher(Template, PreCalc):
         num_triplets : int
             Number of good (l1,l2,l3) triplets in this outer bin.
 
+        Keyword arguments
+        -----------------
+        bidx_max : int, None
+            Index of last bin. If None, use all bins.
+            (default : None)
+
         Returns
         -------
         triplets : ndarray
@@ -2813,8 +2831,16 @@ class Fisher(Template, PreCalc):
 
         good_triplets = np.zeros((num_triplets, 3), dtype=int)
         
-        bins = self.bins['bins']
-        lmax = self.bins['lmax']
+        if bidx_max is not None:
+            bins = self.bins['bins'][:bidx_max + 1]
+            try:
+                lmax = self.bins['bins'][bidx_max + 1] - 1
+            except IndexError:
+                lmax = self.bins['lmax']
+        else:
+            bins = self.bins['bins']
+            lmax = self.bins['lmax']
+
         bmin = bins[bidx]
         try:
             bmax = bins[bidx + 1] - 1
@@ -2995,7 +3021,7 @@ class Fisher(Template, PreCalc):
 
         return b_i, nb_frac, qh_exit
 
-    def interp_fisher(self, invcov, ells, lmin=None, lmax=None,
+    def interp_fisher(self, invcov, ells, lmin=None, lmax=None, lmax_outer=None,
                       fsky=1, verbose=True):
         '''
         Calculate Fisher information by interpolating 
@@ -3017,20 +3043,31 @@ class Fisher(Template, PreCalc):
         lmax : int, None
             Upper limit of Fisher loop. If None,
             use last bin. (default : None)
+        lmax_outer : int, None
+            Upper limit of ell1 in fisher loop.
         fsky : float
             Fraction of sky assumed to be used.
             (default : 1)
         verbose : bool, int
             If True or integer, print stuff.
 
-
         Returns
         -------
         fisher : float
             Fisher information.        
+
+        Notes
+        -----
+        Because ell1 <= ell2 <= ell3 in Fisher loop and because
+        tensor transfer functions go to zero for ell > 200, the 
+        lmax_outer parameter can be set to e.g. 600 to skip
+        computing the Fisher information for values of ell1 that
+        would not have contributed in any case.
         '''
 
         bins = self.bins['bins']
+        bidx_max = np.where(bins <= lmax)[0][-1] 
+        bins = bins[:bidx_max + 1] 
         nptr = self.bispec['pol_trpl'].shape[0]
 
         # Change invcov to K to avoid overflow errors.
@@ -3056,6 +3093,7 @@ class Fisher(Template, PreCalc):
             raise ValueError('lmax = {} > ells[-1] = {}'.format(
                 lmax, ells[-1]))
 
+        # Note, no call to self.bins in _init_fisher_invcov.
         invcov1, invcov2, invcov3 = self._init_fisher_invcov(invcov)
         lmin_c = ells[0]
         lmax_c = ells[-1]
@@ -3066,10 +3104,11 @@ class Fisher(Template, PreCalc):
             sizes_bispec = tools.estimate_n_tuples(ells_fisher, lmax)        
 
             bidx_sorted, n_per_bin = tools.rank_bins(
-                bins, sizes_bispec, ells_fisher)
+                bins, sizes_bispec, ells_fisher, lmax_outer=lmax_outer)
 
             bidx_per_rank = tools.distribute_bins_simple(bidx_sorted,
                                       n_per_bin, self.mpi_size)
+
         else:
             bidx_per_rank = None
 
@@ -3084,13 +3123,13 @@ class Fisher(Template, PreCalc):
 
         # Note: fp = first_pass, b = bispec. Lists of arrays per bidx.
         fp_per_bidx, b_per_bidx, n_trpl_per_bidx = self._mpi_scatter_for_fisher(
-            bidx_per_rank)
-        
+            bidx_per_rank, bidx_max=bidx_max)
+
         fisher_on_rank = 0
         for idx, bidx in enumerate(bidx_per_rank[self.mpi_rank]):
 
             num_triplets = n_trpl_per_bidx[idx]
-            
+
             if num_triplets == 0 and bidx == bins.size - 1:
                 # Last bin has no valid tuples. Just skip.
                 # Perhaps give 0 contribution to fisher?
@@ -3100,7 +3139,8 @@ class Fisher(Template, PreCalc):
                          self.mpi_rank, bins[bidx], lmax))
                 continue
 
-            triplets = self._init_triplets(bidx, num_triplets)
+            
+            triplets = self._init_triplets(bidx, num_triplets, bidx_max=bidx_max)
 
             b_i, nb_frac, qh_exit = self._interp_b(triplets, 
                             fp_per_bidx[idx], b_per_bidx[idx])
@@ -3118,9 +3158,14 @@ class Fisher(Template, PreCalc):
             fisher = tools.fisher_loop(b_i, triplets, 
                                        invcov1, invcov2, invcov3,
                                        lmin_c, lmax_c)
+
             fisher *= 1e36 # Converting invcov back from K to uK
             fisher *= fsky
             fisher *= self.common_amp ** 2 # (16 pi^4 As^2)^2
+            if verbose == 2:
+                print('[rank {:03d}]: fisher = {} for bidx {}, '
+                      '(bin = {}, lmax = {})'.format(self.mpi_rank, fisher,
+                                                    bidx, bins[bidx], lmax))
             fisher_on_rank += fisher
 
         if self.mpi:
