@@ -649,8 +649,8 @@ if __name__ == '__main__':
     beta_dir = opj(base_dir, '20190411_beta/precomputed')
     img_dir = opj(base_dir, '20190411_beta/img/')
 
-#    plot_alpha_beta(beta_dir, img_dir, 60, beta_tag='r1_i1_l2000_16_10')
+    plot_alpha_beta(beta_dir, img_dir, 500, beta_tag='r1_i1_l2500_16_8')
     # plot_alpha_beta_matrix(beta_dir, img_dir)
 #    alpha_at_r(13306.4, beta_tag='r1_i40_l4000')
 #    alpha_at_ell(60, beta_tag='r1_i1_l2000_16_10')
-    plot_gen_alpha(beta_dir, img_dir, 1800)
+#    plot_gen_alpha(beta_dir, img_dir, 1800)
