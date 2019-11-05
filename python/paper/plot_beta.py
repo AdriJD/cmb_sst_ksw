@@ -67,7 +67,7 @@ def plot_gen_alpha(beta_dir, img_dir, ell,
 
     fig, axs = plt.subplots(ncols=1, nrows=2, sharey=False, sharex=True, 
                             figsize=(4, 3), squeeze=False)
-    for pidx, pol in enumerate(['I', 'E']):
+    for pidx, pol in enumerate(['T', 'E']):
         for Lidx, eLL in enumerate(L_range):
 
             ls = linestyles[Lidx]
@@ -129,7 +129,7 @@ def plot_gen_alpha(beta_dir, img_dir, ell,
 
     fig, axs = plt.subplots(ncols=1, nrows=2, sharey=False, sharex=True, 
                             figsize=(4, 3), squeeze=False)
-    for pidx, pol in enumerate(['I', 'E']):
+    for pidx, pol in enumerate(['T', 'E']):
         for Lidx, eLL in enumerate(L_range):
 
             ls = linestyles[Lidx]
@@ -140,7 +140,7 @@ def plot_gen_alpha(beta_dir, img_dir, ell,
                 label = r'$ \ \ \: '+'{0:d}'.format(eLL)+'$'
             else:
                 label = r'$'+'{0:+d}'.format(eLL)+'$'
-            if pol == 'I':
+            if pol == 'T':
                 beta_plot = beta_ti
             if pol == 'E':
                 beta_plot = beta_te
@@ -318,7 +318,7 @@ def plot_alpha_beta(beta_dir, img_dir, ell, beta_tag=None):
     # Scalar
     fig, axs = plt.subplots(ncols=1, nrows=2, sharey=False, sharex=True, 
                             figsize=(4, 3), squeeze=False)
-    for pidx, pol in enumerate(['I', 'E']):
+    for pidx, pol in enumerate(['T', 'E']):
         for Lidx, eLL in enumerate(L_range):
 
             L = eLL + lidx + 2
@@ -361,7 +361,7 @@ def plot_alpha_beta(beta_dir, img_dir, ell, beta_tag=None):
 
     fig, axs = plt.subplots(ncols=1, nrows=3, sharey=False, sharex=True, 
                             figsize=(4, 5), squeeze=False)
-    for pidx, pol in enumerate(['I', 'E', 'B']):
+    for pidx, pol in enumerate(['T', 'E', 'B']):
         for Lidx, eLL in enumerate(L_range):
 
             L = eLL + lidx + 2
@@ -647,10 +647,11 @@ if __name__ == '__main__':
 #    img_dir = opj(base_dir, '20181123_sst/img/beta/')
 #    beta_dir = opj(base_dir, '20181214_sst_debug/precomputed')
     beta_dir = opj(base_dir, '20190411_beta/precomputed')
-    img_dir = opj(base_dir, '20190411_beta/img/')
+#    img_dir = opj(base_dir, '20190411_beta/img/')
+    img_dir = opj(base_dir, '20190411_beta/img/img_temperature')
 
-    plot_alpha_beta(beta_dir, img_dir, 500, beta_tag='r1_i1_l2500_16_8')
+#    plot_alpha_beta(beta_dir, img_dir, 500, beta_tag='r1_i1_l2500_16_8')
     # plot_alpha_beta_matrix(beta_dir, img_dir)
 #    alpha_at_r(13306.4, beta_tag='r1_i40_l4000')
 #    alpha_at_ell(60, beta_tag='r1_i1_l2000_16_10')
-#    plot_gen_alpha(beta_dir, img_dir, 1800)
+    plot_gen_alpha(beta_dir, img_dir, 60)

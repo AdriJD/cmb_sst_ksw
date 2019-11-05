@@ -351,7 +351,7 @@ class PreCalc(MPIBase):
 
     def get_updated_radii(self):
         '''
-        Get the radii (in Mpc) that are more suitable to post-Planck LCDM
+        Get the radii (in Mpc) that are more suitable for the sst case.
         '''
 
         low = np.linspace(0, 9377, num=98, dtype=float, endpoint=False)
@@ -2384,7 +2384,8 @@ class Fisher(Template, PreCalc):
                     pickle.dump(self.cosmo, handle,
                                 protocol=pickle.HIGHEST_PROTOCOL)
                 
-    def get_invcov(self, ells, nls, return_cov=False):
+    def get_invcov(self, ells, nls, return_cov=False, write=False,
+                   write_tag=None):
         '''
         Combine covariance into an inverse cov matrix.
 
@@ -2404,6 +2405,12 @@ class Fisher(Template, PreCalc):
         bin_cov : array-like
             Binned covariance, shape = (bins, 3, 3), if 
             return_bin_cov is set.
+        write : bool
+            If True, write ells, invcov, cov to fisher directory 
+            in pickle file. (default : False)
+        write_tag : str, None
+            If not None, write invcov_<tag>.pkl if `write` is set.
+            (default : None)
         '''
         
         if not nls.shape[1] == ells.size:
@@ -2434,6 +2441,22 @@ class Fisher(Template, PreCalc):
         # Invert.
         for lidx in xrange(ells.size):
             invcov[lidx,:,:] = inv(cov[lidx,:,:])
+
+        if write and self.mpi_rank == 0:
+
+            outdir = self.subdirs['fisher']
+
+            if write_tag is None:
+                invcov_file = opj(outdir, 'invcov.pkl')
+            else:
+                invcov_file = opj(outdir, 'invcov_{}.pkl'.format(write_tag))
+
+            invcov_opts = dict(ells=ells, invcov=invcov, cov=cov)
+                
+            # Store in pickle file.            
+            with open(invcov_file, 'wb') as handle:
+                pickle.dump(invcov_opts, handle,
+                            protocol=pickle.HIGHEST_PROTOCOL)
 
         if return_cov:
             return invcov, cov
@@ -3057,6 +3080,7 @@ class Fisher(Template, PreCalc):
         computing the Fisher information for values of ell1 that
         would not have contributed in any case.
         '''
+#        print('a0', self.mpi_rank)
 
         bins = self.bins['bins']
         bidx_max = np.where(bins <= lmax)[0][-1] 
@@ -3067,6 +3091,8 @@ class Fisher(Template, PreCalc):
         invcov = invcov.copy()
         invcov *= 1e-12
         
+#        print('a1', self.mpi_rank)
+
         # Check input.
         if ells.size != invcov.shape[0]:
             raise ValueError(
@@ -3091,6 +3117,8 @@ class Fisher(Template, PreCalc):
         lmin_c = ells[0]
         lmax_c = ells[-1]
 
+#        print('a', self.mpi_rank)
+
         if self.mpi_rank == 0:
             # Decide how to distribute load over MPI ranks.
             ells_fisher = np.arange(2, lmax + 1)
@@ -3114,13 +3142,15 @@ class Fisher(Template, PreCalc):
                     print('[rank {:03d}]: working on bins {}'.format(
                         rank, bins_on_rank))
 
+#        print('b', self.mpi_rank)
+
         # Note: fp = first_pass, b = bispec. Lists of arrays per bidx.
         fp_per_bidx, b_per_bidx, n_trpl_per_bidx = self._mpi_scatter_for_fisher(
             bidx_per_rank, bidx_max=bidx_max)
 
         fisher_on_rank = 0
         for idx, bidx in enumerate(bidx_per_rank[self.mpi_rank]):
-
+#            print('c', self.mpi_rank)
             num_triplets = n_trpl_per_bidx[idx]
 
             if num_triplets == 0 and bidx == bins.size - 1:
@@ -3132,12 +3162,12 @@ class Fisher(Template, PreCalc):
                          self.mpi_rank, bins[bidx], lmax))
                 continue
 
-            
+#            print('d', self.mpi_rank)
             triplets = self._init_triplets(bidx, num_triplets, bidx_max=bidx_max)
-
+#            print('e', self.mpi_rank)
             b_i, nb_frac, qh_exit = self._interp_b(triplets, 
                             fp_per_bidx[idx], b_per_bidx[idx])
-
+#            print('f', self.mpi_rank)
             if not qh_exit and verbose:
                 print('[rank {:03d}]: Completely switching to nearest-neighbor'
                       ' interpolation for bidx {}, (bin = {}, lmax = {})'.format(
@@ -3146,12 +3176,12 @@ class Fisher(Template, PreCalc):
                 print('[rank {:03d}]: Used nearest-neighbor for {:.2f}% '
                       'of triplets for bidx {}, (bin = {}, lmax = {})'.format(
                           self.mpi_rank, nb_frac * 100, bidx, bins[bidx], lmax))
-                
+#            print('g', self.mpi_rank)
             # Compute Fisher information.
             fisher = tools.fisher_loop(b_i, triplets, 
                                        invcov1, invcov2, invcov3,
                                        lmin_c, lmax_c)
-
+#            print('h', self.mpi_rank)
             fisher *= 1e36 # Converting invcov back from K to uK
             fisher *= fsky
             fisher *= self.common_amp ** 2 # (16 pi^4 As^2)^2

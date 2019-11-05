@@ -135,13 +135,20 @@ def run_camb(lmax, k_eta_fac=5, AccuracyBoost=3, lSampleBoost=2,
                                           raw_cl=True)
 
     # CAMB cls are column-major, so convert.
-    # NOTE this is wrong. You need to do transpose + ascontingousarray
+    # NOTE this is wrong. You need to do transpose + ascontingousarray <- fixed
     for key in cls_camb:
         cls_cm = cls_camb[key]
         n_ell, n_pol = cls_cm.shape # 2d tuple.
-        cls_camb[key] = cls_cm.reshape(n_pol, n_ell)
+#        cls_camb[key] = cls_cm.reshape(n_pol, n_ell)
 
-    ells_cls = np.arange(2, n_ell + 2)
+#        s0, s1 = cls.shape
+#        cls = cls.reshape(s1, s0)
+        temp = np.ascontiguousarray(cls_cm.transpose())
+        # Remove monopole and dipole.
+        cls_camb[key] = temp[:,2:]
+
+
+    ells_cls = np.arange(2, n_ell)
     cls['ells'] = ells_cls
     cls['cls'] = cls_camb
 

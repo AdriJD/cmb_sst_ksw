@@ -18,8 +18,8 @@ from sst import Fisher, camb_tools, plot_tools, tools
 
 opj = os.path.join
 
-def run(ell, prim_template='equilateral', out_dir=None, camb_dir=None,
-        lmin=2, lmax=5000):
+def run(ell, prim_template='local', out_dir=None,
+        lmin=2, lmax=120):
     '''    
     Calculate and save bins, beta and bispec. Then return bispec slice.
 
@@ -29,37 +29,32 @@ def run(ell, prim_template='equilateral', out_dir=None, camb_dir=None,
         Multipole for bispec slice.
     prim_template : str
     out_dir : str
-    camb_dir : str
     lmin : int
     lmax : int
     '''
 
-    tag = 'l{}'.format(lmax)
-    
-    camb_opts = dict(camb_out_dir = camb_dir,
-                     tag='',
-                     lensed=False,
-                     high_ell=False,
-                     interp_factor=None)
+    interp_factor = 10
+    ac = 16
+    ke = 10
+
+#    tag = 'l{}'.format(lmax)
+#    beta_tag = 'l{}_i{}'.format(lmax, interp_factor)
+#    cosmo_tag = 'l{}_ac{}_ke{}'.format(lmax, ac, ke)
+
+    bins_tag = '5200'
+    beta_tag = 'r1_i1_l{}_16_7'.format(lmax, interp_factor)
+    cosmo_tag = '5200_16_7'.format(lmax, ac, ke)
+    bispec_tag = '5200_16_7'
 
     F = Fisher(out_dir)
 
-    F.get_camb_output(**camb_opts)
-    F.get_bins(lmin=lmin, lmax=lmax, load=True,
-                parity='odd', verbose=True, tag=tag)
+    F.get_cosmo(load=True, tag=cosmo_tag, verbose=True, lmax=lmax * 2, 
+                AccuracyBoost=ac, k_eta_fac=ke)
+    F.get_bins(load=True, parity='odd', verbose=True, tag=bins_tag, lmin=lmin, lmax=lmax)
 
-    interp_factor = 1
-    radii_factor = 10
-    beta_tag = 'r{}_i{}_l{}'.format(radii_factor, interp_factor, lmax)
+    F.get_beta(load=True, tag=beta_tag, verbose=True, interp_factor=interp_factor)
 
-    radii = F.get_updated_radii()
-    radii = radii[::radii_factor]
-
-
-    F.get_beta(func='equilateral', radii=radii, verbose=True, optimize=True,
-               interp_factor=interp_factor, load=True, sparse=True, tag=beta_tag)
-
-    F.get_binned_bispec(prim_template, load=True, tag=tag)
+    F.get_binned_bispec(prim_template, load=True, tag=bispec_tag)
     
     b_slice, doublets = F.get_bispec_slice(ell, verbose=2)
     
@@ -119,25 +114,25 @@ def plot_binned_slice(F, filename, plot_lmin=None, plot_lmax=None):
 if __name__ == '__main__':
 
     base_dir = '/mn/stornext/d8/ITA/spider/adri/analysis/'
-    out_dir = opj(base_dir, '20181219_sst_interp')
-    camb_dir = opj(base_dir, '20180911_sst/camb_output/lensed_r0_4000')
+#    out_dir = opj(base_dir, '20181219_sst_interp')
+    out_dir = opj(base_dir, '20190426_sst_plot')
 
-    ell = 5
-    lmax = 10
+    ell = 40
+    lmax = 5200
 
-    plot_lmin = 5
-    plot_lmax = 10
+    plot_lmin = 40
+    plot_lmax = 100
 
-    fformat = 'pdf'
+    fformat = 'png'
 
     prim_template = 'local'
-    F, b_slice, doublets = run(ell, out_dir=out_dir, camb_dir=camb_dir, lmax=lmax,
+    F, b_slice, doublets = run(ell, out_dir=out_dir, lmax=lmax,
                                prim_template=prim_template)
 
     filename = opj(out_dir, 'img', 'bispec_{}_ell{}_lmax{}.{}'.format(
-        prim_template, ell, lmax, fformat))
+                                     prim_template, ell, lmax, fformat))
     plot_slice(F, filename, b_slice, doublets, plot_lmin=plot_lmin, plot_lmax=plot_lmax)
 
     filename_b = opj(out_dir, 'img', 'bispec_{}_b_ell{}_lmax{}.{}'.format(
-        prim_template, ell, lmax, fformat))
+                                         prim_template, ell, lmax, fformat))
     plot_binned_slice(F, filename_b, plot_lmin=plot_lmin, plot_lmax=plot_lmax)

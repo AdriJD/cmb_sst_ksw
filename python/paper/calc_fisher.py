@@ -140,7 +140,7 @@ def add_noise(cls, ells, noise_amp_temp=0, noise_amp_e=0, noise_amp_b=0,
         
 
 def run(out_dir, tag, prim_template='local', add_noise_opts={}, get_cls_opts={},
-        interp_fisher_opts={}):
+        interp_fisher_opts={}, dry=False):
 
     '''    
     Calculate and save bins, beta and bispec. Then calculate fisher.
@@ -155,6 +155,10 @@ def run(out_dir, tag, prim_template='local', add_noise_opts={}, get_cls_opts={},
     Keyword Arguments
     ---------
     prim_template : str
+    dry : bool
+        Do not run fisher estimate (but do everything else).
+    save_cov : bool
+        Save covariance and inverse convariance.
 
     kwargs : {add_noise_opts}, {get_cls_opts}, {interp_fisher_opts}
     '''
@@ -177,28 +181,23 @@ def run(out_dir, tag, prim_template='local', add_noise_opts={}, get_cls_opts={},
 
     F.get_binned_bispec(prim_template, load=True, tag=bispec_tag)
     
-#    r = 0.001
-#    A_lens = 0.1
-#    cls, ells = get_cls(F.cosmo, r=r, A_lens=A_lens, no_ee=False, no_tt=True)
     cls, ells = get_cls(F.cosmo, **get_cls_opts)
 
-#    add_noise(cls, ells, lmin_b=30, lmin_e=30, noise_amp_b=1, noise_amp_e=1, noise_amp_temp=1)
     add_noise(cls, ells, **add_noise_opts)
 
-    invcov, cov = F.get_invcov(ells, cls, return_cov=True)    
+    invcov, cov = F.get_invcov(ells, cls, return_cov=True, write=True, write_tag=tag)    
 
-#    lmax = 4900
     lmax_outer = 200
-#    f_i = F.interp_fisher(invcov, ells, lmin=2, lmax=lmax, lmax_outer=lmax_outer, 
-#                          verbose=2)
-    f_i = F.interp_fisher(invcov, ells, lmin=2, lmax_outer=lmax_outer, verbose=False,
-                          **interp_fisher_opts)
+    
+    if not dry:
+        f_i = F.interp_fisher(invcov, ells, lmin=2, lmax_outer=lmax_outer, verbose=False,
+                              **interp_fisher_opts)
 
-    if F.mpi_rank == 0:        
-        print(f_i)
+        if F.mpi_rank == 0:        
+            print(f_i)
 
-    r = get_cls_opts['r']
-    F.save_fisher(f_i, r=r, tag=tag)
+        r = get_cls_opts['r']
+        F.save_fisher(f_i, r=r, tag=tag)
     
     return
 
@@ -264,6 +263,127 @@ def cv_scaling(out_dir, prim_template='local', A_lens=0.1, r=0.):
                     get_cls_opts=get_cls_opts,
                     interp_fisher_opts=interp_fisher_opts)
 
+def pol(out_dir, prim_template='local', A_lens=0.5, r=0.001, plot=False, dry=False):
+    '''
+    Arguments
+    ---------
+    out_dir : str
+        Output directory for Fisher.
+
+    Keyword Arguments
+    ---------
+    prim_template : str    
+    '''
+
+    lmax_start = 500
+    lmax_end = 4900
+    lmax_steps = 10
+    lmax_arr =  np.logspace(np.log10(lmax_start), np.log10(lmax_end), lmax_steps)
+    lmax_arr = lmax_arr.astype(int)
+
+    lmin_b_arr = np.asarray([2, 20, 30, 50, 80])
+
+    pol_opts_arr = [dict(no_ee=False, no_tt=False),
+                    dict(no_ee=True, no_tt=False),
+                    dict(no_ee=False, no_tt=True)]
+
+
+    noise_amp_temp = 4
+    noise_amp_e = 4 * np.sqrt(2)
+    noise_amp_b = 4 * np.sqrt(2)
+    lmin_e = 2
+
+    for lmax in lmax_arr:
+        for lmin_b in lmin_b_arr:
+            for pol_opts in pol_opts_arr:
+
+                add_noise_opts = dict(noise_amp_temp=noise_amp_temp,
+                                      noise_amp_e=noise_amp_e,
+                                      noise_amp_b=noise_amp_b,
+                                      lmin_b=lmin_b,
+                                      lmin_e=lmin_e)
+
+                no_ee = pol_opts['no_ee']
+                no_tt = pol_opts['no_tt']
+
+                get_cls_opts = dict(A_lens=A_lens,
+                                    r=r,
+                                    no_ee=no_ee,
+                                    no_tt=no_tt)
+
+                interp_fisher_opts = dict(lmax=lmax)
+
+                tag = ('{}_nt{:.4f}_ne{:.4f}_nb{:.4f}_lb{:d}_le{:d}_nee{:d}'
+                       '_ntt{:d}_a{:.4f}_r{:.4f}_l{:d}'.format(prim_template,
+                    noise_amp_temp, noise_amp_e, noise_amp_b, lmin_b,
+                    lmin_e, int(no_ee), int(no_tt), A_lens, r, lmax))
+
+                save_fisher_opts = dict(tag=tag)
+
+                run(out_dir, tag, prim_template=prim_template,
+                    add_noise_opts=add_noise_opts,
+                    get_cls_opts=get_cls_opts,
+                    interp_fisher_opts=interp_fisher_opts,
+                    dry=dry)
+
+def noise(out_dir, prim_template='local', r=0.001, lmax=4900, lmin_b=50, A_lens=None):
+    '''
+    Arguments
+    ---------
+    out_dir : str
+        Output directory for Fisher.
+
+    Keyword Arguments
+    ---------
+    prim_template : str    
+    '''
+
+    pol_opts = dict(no_ee=False, no_tt=False)
+    lmin_e = 2
+
+    noise_i_arr = [0.3, 1, 3, 10]
+    noise_b_arr = np.logspace(np.log10(0.3), np.log10(50), 10)
+    if A_lens is not None:
+        A_lens_arr = [A_lens]
+    else:
+        A_lens_arr = [0.1, 1]
+
+    for A_lens in A_lens_arr:
+        for nb_idx, n_b in enumerate(noise_b_arr):
+            for ni_idx, n_i in enumerate(noise_i_arr):
+
+                noise_amp_temp = n_i
+                noise_amp_e = n_i * np.sqrt(2)
+                noise_amp_b = n_b
+
+                add_noise_opts = dict(noise_amp_temp=noise_amp_temp,
+                                      noise_amp_e=noise_amp_e,
+                                      noise_amp_b=noise_amp_b,
+                                      lmin_b=lmin_b,
+                                      lmin_e=lmin_e)
+
+                no_ee = pol_opts['no_ee']
+                no_tt = pol_opts['no_tt']
+
+                get_cls_opts = dict(A_lens=A_lens,
+                                    r=r,
+                                    no_ee=no_ee,
+                                    no_tt=no_tt)
+
+                interp_fisher_opts = dict(lmax=lmax)
+
+                tag = ('{}_nt{:.4f}_ne{:.4f}_nb{:.4f}_lb{:d}_le{:d}_nee{:d}'
+                       '_ntt{:d}_a{:.4f}_r{:.4f}_l{:d}'.format(prim_template,
+                    noise_amp_temp, noise_amp_e, noise_amp_b, lmin_b,
+                    lmin_e, int(no_ee), int(no_tt), A_lens, r, lmax))
+
+                save_fisher_opts = dict(tag=tag)
+
+                run(out_dir, tag, prim_template=prim_template,
+                    add_noise_opts=add_noise_opts,
+                    get_cls_opts=get_cls_opts,
+                    interp_fisher_opts=interp_fisher_opts)
+
 if __name__ == '__main__':
 
     base_dir = '/mn/stornext/d8/ITA/spider/adri/analysis/'
@@ -281,6 +401,8 @@ if __name__ == '__main__':
     # camb_dir = opj(base_dir, '20180911_sst/camb_output/lensed_r0_4000')
     # camb_dir = opj(base_dir, '20171217_sst/camb_output/high_acy/sparse_5000')
 
-#    run(out_dir)
-    cv_scaling(out_dir, A_lens=1, r=0.001)
+    #run(out_dir)
+    cv_scaling(out_dir, A_lens=0.1, r=0.1, prim_template='equilateral')
+    #pol(out_dir, A_lens=0.5, r=0.001, dry=True) 
+    #noise(out_dir, A_lens=1)
 
