@@ -10,7 +10,6 @@ import numpy as np
 import pickle
 import warnings
 import cProfile
-from mpi4py import MPI
 
 from scipy.special import spherical_jn
 from scipy.integrate import trapz
@@ -23,8 +22,8 @@ from scipy.spatial import qhull
 
 import camb_tools as ct
 import tools
+from .mpibase import MPIBase
 import pywigxjpf as wig
-from beamconv import MPIBase
 
 opj = os.path.join
 
