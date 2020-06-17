@@ -8,6 +8,11 @@ import scipy.stats as ss
 import scipy.spatial.qhull as qhull
 import numba
 
+try:
+    xrange
+except NameError:
+    xrange = range
+
 def combine(a, b, c):
     '''
     Combine three int arrays into a single int array

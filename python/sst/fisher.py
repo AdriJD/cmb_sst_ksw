@@ -14,18 +14,22 @@ import cProfile
 from scipy.special import spherical_jn
 from scipy.integrate import trapz
 from scipy.linalg import inv
-from tools import binned_statistic
 from scipy.interpolate import CubicSpline
 from scipy.interpolate import griddata
 from scipy.signal import convolve
 from scipy.spatial import qhull
 
-import camb_tools as ct
-import tools
+from sst import camb_tools as ct
+from sst import tools
 from .mpibase import MPIBase
 import pywigxjpf as wig
 
 opj = os.path.join
+
+try:
+    xrange
+except NameError:
+    xrange = range
 
 __all__ = ['PreCalc', 'Template', 'Fisher']
 
@@ -1212,14 +1216,14 @@ class PreCalc(MPIBase):
                             tmp_beta = beta_s_f[:,Lidx,kidx,pidx,ridx]
 
                             b_beta_s_f[:,Lidx,kidx,pidx,ridx], _, _ = \
-                                binned_statistic(ells, tmp_beta, statistic='mean',
+                                tools.binned_statistic(ells, tmp_beta, statistic='mean',
                                                  bins=bins_ext)
 
                         # Tensor
                         tmp_beta = beta_t_f[:,Lidx,kidx,pidx,ridx]
 
                         b_beta_t_f[:,Lidx,kidx,pidx,ridx], _, _ = \
-                            binned_statistic(ells, tmp_beta, statistic='mean',
+                            tools.binned_statistic(ells, tmp_beta, statistic='mean',
                                              bins=bins_ext)
 
         # Check for nans.
@@ -2530,7 +2534,7 @@ class Fisher(Template, PreCalc):
                 nell = nls[nidx,:]
 
                 # Bin
-                bin_cov[:,pidx1,pidx2], _, _ = binned_statistic(
+                bin_cov[:,pidx1,pidx2], _, _ = tools.binned_statistic(
                     ells, nell, statistic='mean', bins=bins_ext)
 
         # Invert.

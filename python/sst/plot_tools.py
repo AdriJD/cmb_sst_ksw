@@ -8,6 +8,11 @@ import matplotlib.pyplot as plt
 import os
 import numpy as np
 
+try:
+    xrange
+except NameError:
+    xrange = range
+
 def cls_matrix(filename, ells, cls, plot_dell=True, log=True, lmin=2,
                lmax=None, inv=False, **kwargs):
     '''

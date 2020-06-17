@@ -8,7 +8,7 @@ from scipy.io import FortranFile
 import os
 import sys
 import camb
-import tools
+from sst import tools
 
 opj = os.path.join
 
@@ -155,7 +155,10 @@ def run_camb(lmax, k_eta_fac=5, AccuracyBoost=3, lSampleBoost=2,
     # We need to modify scalar E-mode and tensor I transfer functions, 
     # see Zaldarriaga 1997 eq. 18 and 39. (CAMB applies these factors
     # at a later stage).
-    ells = transfer_s.l
+    try:
+        ells = transfer_s.l
+    except AttributeError:
+        ells = transfer_s.L
     # CAMB ells are in int32, gives nan in sqrt, so convert first.
     ells = ells.astype(int) 
     prefactor = np.sqrt((ells + 2) * (ells + 1) * ells * (ells - 1))

@@ -5,6 +5,11 @@ from sst import Fisher, tools
 
 opj = os.path.join
 
+try:
+    xrange
+except NameError:
+    xrange = range
+
 class TestTools(unittest.TestCase):
 
     @classmethod
@@ -183,9 +188,9 @@ class TestTools(unittest.TestCase):
 
         self.assertEqual(F.cosmo['init_cosmo'], True)
 
-        self.assertTrue(F.cosmo.has_key('transfer'))
-        self.assertTrue(F.cosmo.has_key('cls'))
-        self.assertTrue(F.cosmo.has_key('opts'))
+        self.assertTrue('transfer' in F.cosmo)
+        self.assertTrue('cls' in F.cosmo)
+        self.assertTrue('opts' in F.cosmo)
         
         self.assertEqual(
             F.cosmo['opts']['acc']['AccuracyBoost'], 1)
