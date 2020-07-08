@@ -6,6 +6,7 @@ import matplotlib
 matplotlib.use('agg')
 import matplotlib.pyplot as plt
 import matplotlib.colors as colors
+import argparse
 
 import cProfile, pstats
 
@@ -166,6 +167,9 @@ def run(out_dir, tag, prim_template='local', add_noise_opts={}, get_cls_opts={},
     F = Fisher(out_dir)
 
     if F.mpi_rank == 0:
+        print('working on {}'.format(tag))
+
+    if F.mpi_rank == 0:
         print(tag)
 
     beta_tag = 'r1_i1_l5200_16_7'
@@ -175,7 +179,7 @@ def run(out_dir, tag, prim_template='local', add_noise_opts={}, get_cls_opts={},
 
     F.get_cosmo(load=True, tag=cosmo_tag, verbose=True)
 
-    F.get_bins(load=True, parity='odd', verbose=True, tag=bins_tag)
+    F.get_bins(load=True, parity='odd', verbose=True, tag=bins_tag, lmin=2, lmax=5000)
  
     F.get_beta(load=True, tag=beta_tag, verbose=True)
 
@@ -213,13 +217,18 @@ def cv_scaling(out_dir, prim_template='local', A_lens=0.1, r=0.):
     prim_template : str    
     '''
 
-    lmax_start = 500
-    lmax_end = 4900
-    lmax_steps = 10
-    lmax_arr =  np.logspace(np.log10(lmax_start), np.log10(lmax_end), lmax_steps)
+    #lmax_start = 500
+    #lmax_end = 4900
+    lmax_start = 10
+    lmax_end = 50
+
+    #lmax_steps = 50
+    #lmax_arr =  np.logspace(np.log10(lmax_start), np.log10(lmax_end), lmax_steps)
+    lmax_arr = np.arange(lmax_start, lmax_end + 1)
     lmax_arr = lmax_arr.astype(int)
 
-    lmin_b_arr = np.asarray([2, 20, 30, 50, 80])
+    #lmin_b_arr = np.asarray([2, 20, 30, 50, 80])
+    lmin_b_arr = np.asarray([2])
 
     pol_opts_arr = [dict(no_ee=False, no_tt=False),
                     dict(no_ee=True, no_tt=False),
@@ -388,21 +397,14 @@ if __name__ == '__main__':
 
     base_dir = '/mn/stornext/d8/ITA/spider/adri/analysis/'
 
-    # out_dir = opj(base_dir, '20180911_sst/beta')
-    # out_dir = opj(base_dir, '20180911_sst/beta_sparse_ell')
-    #out_dir = opj(base_dir, '20181123_sst')
-    #out_dir = opj(base_dir, '20181214_sst_debug')
-    #out_dir = opj(base_dir, '20181219_sst_interp')
-    out_dir = opj(base_dir, '20190411_beta')
+    parser = argparse.ArgumentParser()
+    parser.add_argument("odir")
+    args = parser.parse_args()
 
-    # camb_dir = opj(base_dir, '20171217_sst/camb_output/high_acy/sparse_5000')
-    # camb_dir = opj(base_dir, '20171217_sst/camb_output/high_acy/nolens_4000')
-    # camb_dir = opj(base_dir, '20171217_sst/camb_output/high_acy/nolens_5200')
-    # camb_dir = opj(base_dir, '20180911_sst/camb_output/lensed_r0_4000')
-    # camb_dir = opj(base_dir, '20171217_sst/camb_output/high_acy/sparse_5000')
+    out_dir = args.odir    
 
     #run(out_dir)
-    cv_scaling(out_dir, A_lens=0.1, r=0.1, prim_template='equilateral')
+    cv_scaling(out_dir, A_lens=0.1, r=0.1, prim_template='local')
     #pol(out_dir, A_lens=0.5, r=0.001, dry=True) 
     #noise(out_dir, A_lens=1)
 
