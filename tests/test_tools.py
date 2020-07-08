@@ -589,7 +589,7 @@ class TestTools(unittest.TestCase):
 
     def test_ell2bidx(self):
         
-        bins = [2, 3, 4, 5, 10, 20]
+        bins = np.asarray([2, 3, 4, 5, 10, 20])
         
         ell = 2
         self.assertEqual(tools.ell2bidx(ell, bins), 0)
