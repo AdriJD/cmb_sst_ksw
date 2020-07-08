@@ -832,10 +832,6 @@ def _fisher_loop(bispec, triplets, ic1, ic2, ic3, lmin):
     '''
 
     num_triplets = triplets.shape[0]
-
-#    lidx1_old = -10
-#    lidx2_old = -10
-
     fisher = 0
 
     for ii in xrange(num_triplets):
@@ -848,43 +844,8 @@ def _fisher_loop(bispec, triplets, ic1, ic2, ic3, lmin):
         
         b123 = bispec[ii]
 
-#        if lidx1 != lidx1_old:
-#            # New l1, update inv. covariance matrix.
-#            ic1_t = ic1[lidx1]
-#            lidx1_old = lidx1
-#            update = True
-
-#        if update:
-#            # If new l1, redo ic1 * ic2.
-#            ic12_t = ic1_t 
-#            ic12_t *= ic2[lidx2]
-#            lidx2_old = lidx2      
-#            # Reset
-#            update = False
-
-#        elif lidx2 != lidx2_old:
-#            # Same l1, but new l2.
-#            ic12_t = ic1_t 
-#            ic12_t *= ic2[lidx2]
-#            lidx2_old = lidx2            
-
-#        ic123_t = ic12_t
-#        ic123_t *= ic3[lidx3]
-
         ic123_t = ic1[lidx1] * ic2[lidx2] * ic3[lidx3]
         
-#        if has_nan(ic123_t):
-#            print('lidx1')
-#            print(has_nan(ic1[lidx1]))
-
-#            print('lidx2')
-#            print(has_nan(ic2[lidx2]))
-
-#            print(lidx3)
-#            print(has_nan(ic3[lidx3]))
-
-
-
         f = contract_bcb(b123, ic123_t)
         f *= one_over_delta(l1, l2, l3)
         fisher += f
