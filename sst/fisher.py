@@ -688,13 +688,13 @@ class PreCalc(MPIBase):
 
                 if DL == -1 or DL == 1:
                     # only here we need to fill the scalar factor
-                    tmp = wig.wig3jj([2*ell, 2*L, 2,
+                    tmp = wig.wig3jj_array([2*ell, 2*L, 2,
                                       0, 0, 0])
                     tmp *= np.sqrt((2 * L + 1) * (2 * ell + 1) * 3)
                     tmp /= (2 * np.sqrt(np.pi))
                     wig_s[lidx,Lidx] = tmp
 
-                tmp = wig.wig3jj([2*ell, 2*L, 4,
+                tmp = wig.wig3jj_array([2*ell, 2*L, 4,
                                   4, 0, -4])
                 tmp *= np.sqrt((2 * L + 1) * (2 * ell + 1) * 5)
                 tmp /= (2 * np.sqrt(np.pi))
@@ -1541,8 +1541,8 @@ class Fisher(Template, PreCalc):
         Lidx3 = DL3 + 2
 
         # define function names locally for faster lookup
-        wig3jj = wig.wig3jj
-        wig9jj = wig.wig9jj
+        wig3jj = wig.wig3jj_array
+        wig9jj = wig.wig9jj_array
         trapz_loc = trapz
 
         bins_outer_f = bins.copy() # f = full
@@ -2291,7 +2291,7 @@ class Fisher(Template, PreCalc):
                 # for lmax > 5000 file too big otherwise.
 
                 if self.mpi_rank == 0:
-                    beta_keys = self.beta.keys()
+                    beta_keys = list(self.beta.keys())
 
                 if self.mpi_rank != 0:
                     self.beta = {}
