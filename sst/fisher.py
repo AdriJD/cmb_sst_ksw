@@ -1451,7 +1451,6 @@ class Fisher(Template, PreCalc):
 
         self.bispec['pol_trpl'] = pol_trpl
 
-#    @profile
     def _binned_bispectrum(self, DL1, DL2, DL3, prim_template='local',
                            radii_sub=None):
         '''

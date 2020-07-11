@@ -6,17 +6,12 @@ class MPIBase(object):
     Parent class for MPI related stuff
     '''
 
-    def __init__(self, mpi=True, comm=None, **kwargs):
+    def __init__(self, comm=None, **kwargs):
         '''
-        Check if MPI is working by checking common
-        MPI environment variables and set MPI atrributes.
+        Init MPI communicator if not present yet.
 
         Keyword arguments
         ---------
-        mpi : bool
-            If False, do not use MPI regardless of MPI env.
-            otherwise, let code decide based on env. vars
-            (default : True)
         comm : MPI.comm object, None
             External communicator. If left None, create
             communicator. (default : None)
@@ -24,33 +19,22 @@ class MPIBase(object):
 
         super(MPIBase, self).__init__(**kwargs)
 
-        # Check whether MPI is working
-        # add your own environment variable if needed
-        # Open MPI environment variable
-        ompi_size = os.getenv('OMPI_COMM_WORLD_SIZE')
-        # intel and/or mpich environment variable
-        pmi_size = os.getenv('PMI_SIZE')
-
-        if not (ompi_size or pmi_size) or not mpi:
-            self.mpi = False
-
-        else:
+        if comm is not None:
+            self._comm = comm
+            self.mpi = True
+        
+        if comm is None:
             try:
                 from mpi4py import MPI
-
-                self.mpi = True
-                self._mpi_double = MPI.DOUBLE
-                self._mpi_sum = MPI.SUM
-                if comm:
-                    self._comm = comm
-                else:
-                    self._comm = MPI.COMM_WORLD
 
             except ImportError:
                 warn("Failed to import mpi4py, continuing without MPI",
                      RuntimeWarning)
 
                 self.mpi = False
+            else:
+                self.mpi = True
+                self._comm = MPI.COMM_WORLD
 
     @property
     def mpi_rank(self):
@@ -191,7 +175,8 @@ class MPIBase(object):
         else:
             arr = None
 
-        self._comm.Reduce(arr_loc, arr, op=self._mpi_sum, root=0)
+        #self._comm.Reduce(arr_loc, arr, op=self._mpi_sum, root=0)
+        self._comm.Reduce(arr_loc, arr, root=0)
 
         return arr
 
