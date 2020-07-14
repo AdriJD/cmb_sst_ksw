@@ -657,12 +657,12 @@ class PreCalc(MPIBase):
     def init_wig3j(self):
         '''
         Precompute I^000_lL1 and I^20-2_lL2 for all unique ells
-        and \Delta L \in [-2, -1, 0, 1, 2]
+        and Delta L in [-2, -1, 0, 1, 2]
 
         Notes
         -----        
         Stored internally as wig_s and wig_t keys in bins dict.
-        Arrays have shape (ells.size, (\Delta L = 5)). So full 
+        Arrays have shape (ells.size, (Delta L = 5)). So full 
         ells-sized array, although only values in unique_ells 
         are calculated.
 
@@ -707,7 +707,7 @@ class PreCalc(MPIBase):
     def init_beta(self, func=None, L_range=[-2, -1, 0, 1, 2], radii=None,
              optimize=True, interp_factor=None, sparse=True, verbose=False):
         '''
-        Calculate beta_l,L(r) = 2/pi * \int k^2 dk f(k) j_L(kr) T_X,l^(Z)(k)
+        Calculate beta_l,L(r) = 2/pi * int k^2 dk f(k) j_L(kr) T_X,l^(Z)(k)
         for provided functions of k.
 
         Keyword Arguments
@@ -1256,7 +1256,7 @@ class Template(object):
         Notes
         -----
         <h zeta zeta > = (2pi)^3 f(k1, k2, k3) delta(k1 + k2 + k3)
-        * e(\hat(k1)) \hat(k2) \hat(k3),
+        * e(hat(k1)) hat(k2) hat(k3),
         where f = 16 pi^4 As^2 fnl * S
 
         S (shape) is for (see Planck XVII):
@@ -1464,7 +1464,7 @@ class Fisher(Template, PreCalc):
     def _binned_bispectrum(self, DL1, DL2, DL3, prim_template='local',
                            radii_sub=None):
         '''
-        Return binned bispectrum for given \Delta L triplet.
+        Return binned bispectrum for given Delta L triplet.
 
         Arguments
         ---------
