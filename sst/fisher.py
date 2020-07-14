@@ -1418,36 +1418,46 @@ class Fisher(Template, PreCalc):
         '''
         Store polarization triples internally in (..,3) shaped array.
 
-        For now, only triplets containing a single B-mode.
-
         Keyword Arguments
         -----------------
         single_bmode : bool
-            Only create triplets that contain a single B-mode.
-            (default : True)
+            Only create triplets that contain a single B-mode
+            or, if False,  create triplets with no B-mode. (default : True)
 
         Notes
         -----
         I = 0, E = 1, B = 2
+        Triplets are all unique permutation of these numbers.
         '''
 
         if single_bmode is False:
-            raise NotImplementedError('Not possible yet')
+            
+            pol_trpl = np.zeros((8, 3), dtype=int)
 
-        pol_trpl = np.zeros((12, 3), dtype=int)
+            pol_trpl[0] = 0, 0, 0
+            pol_trpl[1] = 1, 1, 1
+            pol_trpl[2] = 0, 0, 1
+            pol_trpl[3] = 0, 1, 0
+            pol_trpl[4] = 1, 0, 0
+            pol_trpl[5] = 0, 1, 1
+            pol_trpl[6] = 1, 0, 1
+            pol_trpl[7] = 1, 1, 0
 
-        pol_trpl[0] = 0, 0, 2
-        pol_trpl[1] = 0, 2, 0
-        pol_trpl[2] = 2, 0, 0
-        pol_trpl[3] = 1, 0, 2
-        pol_trpl[4] = 1, 2, 0
-        pol_trpl[5] = 2, 1, 0
-        pol_trpl[6] = 0, 1, 2
-        pol_trpl[7] = 0, 2, 1
-        pol_trpl[8] = 2, 0, 1
-        pol_trpl[9] = 1, 1, 2
-        pol_trpl[10] = 1, 2, 1
-        pol_trpl[11] = 2, 1, 1
+        else:
+            pol_trpl = np.zeros((12, 3), dtype=int)
+
+            pol_trpl[0] = 0, 0, 2
+            pol_trpl[1] = 0, 2, 0
+            pol_trpl[2] = 2, 0, 0
+            pol_trpl[3] = 1, 0, 2
+            pol_trpl[4] = 1, 2, 0
+            pol_trpl[5] = 2, 1, 0
+            pol_trpl[6] = 0, 1, 2
+            pol_trpl[7] = 0, 2, 1
+            pol_trpl[8] = 2, 0, 1
+            pol_trpl[9] = 1, 1, 2
+            pol_trpl[10] = 1, 2, 1
+            pol_trpl[11] = 2, 1, 1
 
         self.bispec['pol_trpl'] = pol_trpl
 
@@ -1663,12 +1673,17 @@ class Fisher(Template, PreCalc):
                     ang_tss *= wig_s[lidx2, Lidx2]
                     ang_tss *= wig_s[lidx3, Lidx3]
 
+                    # For even bispectra, the 9j symbols are sometimes zero
+                    # even though all triangle equations are verified.
+                    # To not make this case produce an error we introduce the
+                    # ang_tss_3j variables.
+                    ang_tss_3j = ang_tss
+                    
                     ang_tss *= ang
                     if ang_tss != 0.:
                         ang_tss *= wig9jj( [(2*ell1),  (2*ell2),  (2*ell3),
                                             (2*L1),  (2*L2),  (2*L3),
                                             4,  2,  2] ) 
-
                     else:
                         # don't waste time on 9j if zero anyway
                         pass
@@ -1678,6 +1693,8 @@ class Fisher(Template, PreCalc):
                     ang_sts *= wig_t[lidx2, Lidx2]
                     ang_sts *= wig_s[lidx3, Lidx3]
 
+                    ang_sts_3j = ang_sts
+
                     ang_sts *= ang
                     if ang_sts != 0.:
                         ang_sts *= wig9jj( [(2*ell1),  (2*ell2),  (2*ell3),
@@ -1685,10 +1702,12 @@ class Fisher(Template, PreCalc):
                                                 2, 4,  2] )
                     else:
                         pass
-                    # TSS
+                    # SST
                     ang_sst = wig_s[lidx1, Lidx1]
                     ang_sst *= wig_s[lidx2, Lidx2]
                     ang_sst *= wig_t[lidx3, Lidx3]
+
+                    ang_sst_3j = ang_sst
 
                     ang_sst *= ang
                     if ang_sst != 0.:
@@ -1698,10 +1717,14 @@ class Fisher(Template, PreCalc):
                     else:
                         pass
 
-                    if ang_tss == 0. and ang_sts == 0. and ang_sst == 0. \
-                       and ell1!=ell2!=ell3:
+                    if ang_tss_3j == 0. and ang_sts_3j == 0. and ang_sst_3j == 0. \
+                       and ell1!=ell2!=ell3:                        
                         # wrong L,ell comb, determine what went wrong
-                        print(ell1, ell2, ell3, L1, L2, L3, num)
+                        print(ell1, ell2, ell3, L1 -ell1, L2 - ell2, L3 - ell3, num)
+                        print(ang)
+                        print(wig_t[lidx1, Lidx1], wig_s[lidx2, Lidx2], wig_s[lidx3, Lidx3])
+                        print(wig_s[lidx1, Lidx1], wig_t[lidx2, Lidx2], wig_s[lidx3, Lidx3])
+                        print(wig_s[lidx1, Lidx1], wig_s[lidx2, Lidx2], wig_t[lidx3, Lidx3])
                         print(ang_tss, ang_sts, ang_sst)
                         print(np.abs(ell1 - ell2) <= ell3 <= ell1 + ell2)
                         print(np.abs(L1 - L2) <= L3 <= L1 + L2)
@@ -1950,15 +1973,40 @@ class Fisher(Template, PreCalc):
             is the number of polarization triplets considered.
         '''
 
-        # All the tuples for single B-mode bispectra.
-        L_tups = [(+1, +1, +1),
-                  (+1, -1, -1),
-                  (-1, +1, +1),
-                  (-1, -1, -1),
-                  (+1, -1, +1),
-                  (-1, +1, -1),
-                  (+1, +1, -1),
-                  (-1, -1, +1)]
+        parity = self.bins['parity']
+        if parity == 'odd':
+            single_bmode = True
+        elif parity == 'even':
+            single_bmode = False
+        else:
+            raise NotImplementedError(
+                'Cannot compute bispec for both parities simulatenously')
+
+        if single_bmode is True:
+            # All the L tuples for single B-mode bispectra.
+            L_tups = [(+1, +1, +1),
+                      (+1, -1, -1),
+                      (-1, +1, +1),
+                      (-1, -1, -1),
+                      (+1, -1, +1),
+                      (-1, +1, -1),
+                      (+1, +1, -1),
+                      (-1, -1, +1)]
+
+        elif single_bmode is False:
+            # All the L tuples for no B-mode bispectra.
+            L_tups = [(0, +1, +1), (+1, 0, +1), (+1, +1, 0),
+                      (0, +1, -1), (+1, 0, -1), (+1, -1, 0),
+                      (0, -1, +1), (-1, 0, +1), (-1, +1, 0),
+                      (0, -1, -1), (-1, 0, -1), (-1, -1, 0), 
+                      (+2, +1, +1), (+1, +2, +1), (+1, +1, +2), 
+                      (+2, +1, -1), (+1, +2, -1), (+1, -1, +2), 
+                      (+2, -1, +1), (-1, +2, +1), (-1, +1, +2), 
+                      (+2, -1, -1), (-1, +2, -1), (-1, -1, +2),
+                      (-2, +1, +1), (+1, -2, +1), (+1, +1, -2),
+                      (-2, +1, -1), (+1, -2, -1), (+1, -1, -2), 
+                      (-2, -1, +1), (-1, -2, +1), (-1, +1, -2),
+                      (-2, -1, -1), (-1, -2, -1), (-1, -1, -2)]
 
         for Lidx, L_tup in enumerate(L_tups):
 
@@ -2119,7 +2167,17 @@ class Fisher(Template, PreCalc):
                 print('Recomputing bispec')
 
             self.init_wig3j()
-            self.init_pol_triplets(single_bmode=True)
+
+            parity = self.bins['parity']
+            if parity == 'odd':
+                single_bmode = True
+            elif parity == 'even':
+                single_bmode = False
+            else:
+                raise NotImplementedError(
+                    'Cannot compute bispec for both parities simulatenously')
+
+            self.init_pol_triplets(single_bmode=single_bmode)
             bispec = self._compute_binned_bispec(prim_template,
                                                    radii_sub=radii_sub)
             self.bispec['bispec'] = bispec
